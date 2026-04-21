@@ -112,7 +112,20 @@ def _build_cluster_series(
 
 
 def _extract_total_size(payload: Any) -> int | None:
-    """Sum ``repo[*].size`` across all stanzas in a pgBackRest info dump."""
+    """Total bytes the pgBackRest repo currently holds for backups.
+
+    pgBackRest's ``info --output=json`` does NOT publish a top-level
+    "size" on each ``repo[]`` entry — those entries only carry
+    ``{key, cipher, status}``. The per-backup footprint lives at
+    ``backup[i].info.repository.delta`` (new bytes that backup added to
+    the repo: equal to ``repository.size`` for fulls, the marginal delta
+    for diff/incr). Summing that across every retained backup in every
+    stanza approximates "what's in the repo right now" minus the WAL
+    archive (whose byte counts aren't in this payload at all).
+
+    Returns None when nothing usable was found, so callers can skip
+    rather than persist a misleading zero.
+    """
     if not isinstance(payload, list):
         return None
     total = 0
@@ -120,15 +133,23 @@ def _extract_total_size(payload: Any) -> int | None:
     for stanza in payload:
         if not isinstance(stanza, dict):
             continue
-        repos = stanza.get("repo") or []
-        if not isinstance(repos, list):
-            continue
-        for repo in repos:
-            if not isinstance(repo, dict):
+        for backup in stanza.get("backup") or []:
+            if not isinstance(backup, dict):
                 continue
-            size = repo.get("size")
-            if isinstance(size, (int, float)):
-                total += int(size)
+            info = backup.get("info")
+            if not isinstance(info, dict):
+                continue
+            repository = info.get("repository")
+            if not isinstance(repository, dict):
+                continue
+            # Prefer per-backup delta (true marginal bytes); fall back to
+            # repository.size which equals delta for fulls and is at least
+            # an upper bound for diff/incr if delta is somehow missing.
+            value = repository.get("delta")
+            if not isinstance(value, (int, float)):
+                value = repository.get("size")
+            if isinstance(value, (int, float)):
+                total += int(value)
                 found = True
     return total if found else None
 

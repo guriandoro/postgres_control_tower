@@ -189,6 +189,9 @@ export interface PgbrBackup {
 
 export interface PgbrRepo {
   key?: number;
+  cipher?: string;
   status?: { code?: number; message?: string };
-  size?: number;
+  // Note: pgBackRest does NOT put a size here. Per-backup footprint is
+  // PgbrBackup.info.repository.{size,delta}. Don't add `size?: number`
+  // — it'll always be undefined and silently zero out aggregations.
 }

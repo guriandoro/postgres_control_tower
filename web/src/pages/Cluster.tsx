@@ -74,8 +74,20 @@ export function ClusterPage() {
     );
   }
 
+  // pgBackRest's info JSON doesn't put a "size" on repo[] entries — those
+  // only carry {key, cipher, status}. The on-repo footprint per backup is
+  // info.repository.delta (full's full size, diff/incr's added bytes).
+  // Sum that across every retained backup of every stanza for a sane
+  // "current repo size", matching the manager's storage forecast.
   const repoSizeBytes = stanzas.reduce(
-    (sum, s) => sum + (s.repo?.[0]?.size ?? 0),
+    (sum, s) =>
+      sum +
+      (s.backup ?? []).reduce(
+        (acc, b) =>
+          acc +
+          (b.info?.repository?.delta ?? b.info?.repository?.size ?? 0),
+        0,
+      ),
     0,
   );
 
