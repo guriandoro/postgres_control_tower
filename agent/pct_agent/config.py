@@ -100,12 +100,21 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def load_settings() -> AgentSettings:
-    """Merge YAML file (if any) under env-driven defaults."""
+    """Resolve settings with precedence: env vars > YAML file > field defaults.
+
+    The previous implementation merged ``base.model_dump()`` (i.e. every
+    field, including unset defaults like ``pgbackrest_stanza=""``) on top
+    of the YAML, which silently clobbered any YAML-only setting with the
+    field's default. ``pydantic_settings`` records which fields were
+    populated from the environment (or constructor) in
+    ``model_fields_set``; we only want those to override the YAML.
+    """
     base = AgentSettings()
     file_data = _load_yaml(base.config_path)
     if not file_data:
         return base
-    merged = {**file_data, **{k: v for k, v in base.model_dump().items() if v is not None}}
+    env_overrides = {name: getattr(base, name) for name in base.model_fields_set}
+    merged = {**file_data, **env_overrides}
     return AgentSettings(**merged)
 
 
