@@ -1,9 +1,12 @@
 """Cluster read views (UI-facing).
 
-Two endpoints:
+Endpoints:
 - ``GET /api/v1/clusters`` — fleet summary, one row per cluster.
 - ``GET /api/v1/clusters/{id}`` — per-cluster detail, with embedded agents
   and their latest pgBackRest snapshot + WAL health sample.
+- ``GET /api/v1/clusters/{id}/storage_forecast`` — latest forecast row.
+- ``GET /api/v1/clusters/{id}/wal_health`` — per-agent WAL lag history
+  for the sparkline.
 
 Both require a UI session (JWT). Agent ingest endpoints live under
 ``/api/v1/agents/*`` and use bearer tokens.
@@ -11,9 +14,10 @@ Both require a UI session (JWT). Agent ingest endpoints live under
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,9 +28,11 @@ from ..schemas import (
     AgentDetail,
     ClusterDetail,
     ClusterSummary,
+    ClusterWalHealth,
     PgbackrestInfoOut,
     StorageForecastOut,
     WalHealthOut,
+    WalHealthSeries,
 )
 
 router = APIRouter()
@@ -145,4 +151,78 @@ def get_storage_forecast(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cluster not found")
     return db.scalar(
         select(StorageForecast).where(StorageForecast.cluster_id == cluster_id)
+    )
+
+
+@router.get(
+    "/{cluster_id}/wal_health",
+    response_model=ClusterWalHealth,
+)
+def get_cluster_wal_health(
+    cluster_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+    since_minutes: int = Query(
+        default=60,
+        ge=1,
+        le=24 * 60,
+        description="Look-back window for WAL samples, in minutes.",
+    ),
+    max_per_agent: int = Query(
+        default=300,
+        ge=1,
+        le=2000,
+        description=(
+            "Hard cap on samples returned per agent. The collector ticks every "
+            "30s, so the default keeps roughly 2.5h of resolution if the look-"
+            "back window is widened."
+        ),
+    ),
+) -> ClusterWalHealth:
+    """Per-agent WAL archival history for the cluster's sparkline.
+
+    Returns one ``WalHealthSeries`` per agent currently attached to the
+    cluster (even if it has no samples in the window — empty
+    ``samples`` keeps the UI's per-agent legend stable across renders).
+    Samples are ordered oldest-first so the chart can plot them as-is.
+    """
+    cluster = db.get(Cluster, cluster_id)
+    if cluster is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Cluster not found")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+    agents = list(
+        db.scalars(
+            select(Agent).where(Agent.cluster_id == cluster_id).order_by(Agent.id)
+        ).all()
+    )
+
+    series: list[WalHealthSeries] = []
+    for agent in agents:
+        # Pull the newest N rows in the window, then reverse for plotting.
+        rows = list(
+            db.scalars(
+                select(WalHealth)
+                .where(
+                    WalHealth.agent_id == agent.id,
+                    WalHealth.captured_at >= cutoff,
+                )
+                .order_by(WalHealth.captured_at.desc())
+                .limit(max_per_agent)
+            ).all()
+        )
+        rows.reverse()
+        series.append(
+            WalHealthSeries(
+                agent_id=agent.id,
+                hostname=agent.hostname,
+                role=agent.role,  # type: ignore[arg-type]
+                samples=[WalHealthOut.model_validate(r) for r in rows],
+            )
+        )
+
+    return ClusterWalHealth(
+        cluster_id=cluster_id,
+        since_minutes=since_minutes,
+        series=series,
     )

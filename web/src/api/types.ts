@@ -66,6 +66,19 @@ export interface ClusterDetail {
   agents: AgentDetail[];
 }
 
+export interface WalHealthSeries {
+  agent_id: number;
+  hostname: string;
+  role: AgentRole;
+  samples: WalHealth[];
+}
+
+export interface ClusterWalHealth {
+  cluster_id: number;
+  since_minutes: number;
+  series: WalHealthSeries[];
+}
+
 export interface LogEvent {
   id: number;
   ts_utc: string;

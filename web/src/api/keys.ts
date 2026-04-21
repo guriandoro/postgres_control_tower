@@ -15,4 +15,6 @@ export const queryKeys = {
   alertsSummary: () => ["alerts", "summary"] as const,
   storageForecast: (clusterId: number) =>
     ["forecast", "storage", clusterId] as const,
+  clusterWalHealth: (clusterId: number, sinceMinutes: number) =>
+    ["clusters", clusterId, "wal-health", sinceMinutes] as const,
 };

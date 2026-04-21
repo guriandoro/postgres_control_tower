@@ -33,6 +33,7 @@ All routes are prefixed with `/api/v1`.
 | Clusters    | `/clusters`                                        | GET    | UI JWT (viewer)     |
 | Clusters    | `/clusters/{cluster_id}`                           | GET    | UI JWT (viewer)     |
 | Clusters    | `/clusters/{cluster_id}/storage_forecast`          | GET    | UI JWT (viewer)     |
+| Clusters    | `/clusters/{cluster_id}/wal_health`                | GET    | UI JWT (viewer)     |
 | Logs read   | `/logs/events`                                     | GET    | UI JWT (viewer)     |
 | Logs read   | `/logs/events/{event_id}`                          | GET    | UI JWT (viewer)     |
 | Logs read   | `/logs/role_transitions`                           | GET    | UI JWT (viewer)     |
@@ -182,6 +183,44 @@ computed yet.
 
 `days_to_target` is `null` when growth is non-positive or no
 `PCT_FORECAST_TARGET_BYTES` is configured.
+
+### WAL archive lag history
+
+`GET /api/v1/clusters/{cluster_id}/wal_health`
+
+Per-agent timeseries of WAL archival samples for the cluster's
+sparkline. Each agent in the cluster contributes its own series
+(empty `samples` when nothing was captured in the window — keeps the
+chart legend stable across renders).
+
+Query parameters:
+
+- `since_minutes` (default `60`, max `1440`) — look-back window.
+- `max_per_agent` (default `300`, max `2000`) — hard cap on samples
+  per agent. Collector ticks every 30s, so the default keeps roughly
+  2.5h of resolution if the look-back is widened.
+
+```json
+{
+  "cluster_id": 2,
+  "since_minutes": 60,
+  "series": [
+    {
+      "agent_id": 2,
+      "hostname": "patroni-1",
+      "role": "primary",
+      "samples": [
+        {
+          "captured_at": "2026-04-21T22:00:00+00:00",
+          "last_archived_wal": "0000000100000000000000A1",
+          "archive_lag_seconds": 4,
+          "gap_detected": false
+        }
+      ]
+    }
+  ]
+}
+```
 
 ## Logs
 

@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Spinner } from "@/components/ui/Spinner";
 import { RetentionTimeline } from "@/charts/RetentionTimeline";
 import { WalSparkline } from "@/charts/WalSparkline";
-import { useCluster } from "@/hooks/queries/useClusters";
+import { useCluster, useClusterWalHealth } from "@/hooks/queries/useClusters";
 import { useRoleTransitions } from "@/hooks/queries/useLogs";
 import { useStorageForecast } from "@/hooks/queries/useAlerts";
 import type { AgentRole, PgbrStanza } from "@/api/types";
@@ -23,6 +23,9 @@ export function ClusterPage() {
     limit: 25,
   });
   const { data: forecast } = useStorageForecast(
+    Number.isFinite(clusterId) ? clusterId : undefined,
+  );
+  const { data: walHealth } = useClusterWalHealth(
     Number.isFinite(clusterId) ? clusterId : undefined,
   );
 
@@ -44,15 +47,6 @@ export function ClusterPage() {
     }
     return [...byName.values()];
   }, [data]);
-
-  const walPoints = useMemo(
-    () =>
-      data?.agents.map((a) => ({
-        ts: a.latest_wal_health?.captured_at ?? "",
-        lag: a.latest_wal_health?.archive_lag_seconds ?? null,
-      })) ?? [],
-    [data],
-  );
 
   if (!Number.isFinite(clusterId)) {
     return <p className="text-sm text-destructive">Invalid cluster id.</p>;
@@ -229,10 +223,14 @@ export function ClusterPage() {
         <Card>
           <CardHeader>
             <CardTitle>WAL archive lag</CardTitle>
-            <CardDescription>One sample per agent (latest).</CardDescription>
+            <CardDescription>
+              {walHealth
+                ? `Per-agent series, last ${walHealth.since_minutes} min.`
+                : "Per-agent series."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <WalSparkline points={walPoints} />
+            <WalSparkline series={walHealth?.series ?? []} />
           </CardContent>
         </Card>
       </section>

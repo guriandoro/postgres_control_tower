@@ -164,6 +164,27 @@ class ClusterDetail(ClusterOut):
     agents: list[AgentDetail]
 
 
+class WalHealthSeries(BaseModel):
+    """Per-agent timeseries of WAL archival samples for the WAL sparkline."""
+
+    agent_id: int
+    hostname: str
+    role: AgentRole
+    samples: list[WalHealthOut]
+
+
+class ClusterWalHealth(BaseModel):
+    """Cluster-wide WAL archival history grouped by agent.
+
+    Each agent gets its own series so the UI can draw one line per node
+    instead of collapsing primary + replicas into a single sparkline.
+    """
+
+    cluster_id: int
+    since_minutes: int
+    series: list[WalHealthSeries]
+
+
 # ---------- Log ingestion + query ----------
 
 
