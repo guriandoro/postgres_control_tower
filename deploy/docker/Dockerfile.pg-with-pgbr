@@ -45,9 +45,14 @@ RUN chmod +x /docker-entrypoint-initdb.d/01-init.sh
 VOLUME ["/var/lib/postgresql/data", "/var/lib/pgbackrest", \
         "/var/log/postgresql", "/var/log/pgbackrest"]
 
-# The official postgres image already runs as `postgres` and already has
-# tini-equivalent logic in docker-entrypoint.sh; we don't override the
-# entrypoint here. We just override the command so PG reads our config.
+# Wrapper entrypoint: fixes ownership on shared named volumes (which can
+# be initialised by the sibling pct-agent container's image first) before
+# handing off to the upstream postgres entrypoint. See the script header
+# for details.
+COPY deploy/docker/entrypoint-pg-standalone.sh /usr/local/bin/entrypoint-pg-standalone.sh
+RUN chmod +x /usr/local/bin/entrypoint-pg-standalone.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-pg-standalone.sh"]
 CMD ["postgres", \
      "-c", "config_file=/etc/postgresql/postgresql.conf", \
      "-c", "hba_file=/etc/postgresql/pg_hba.conf"]

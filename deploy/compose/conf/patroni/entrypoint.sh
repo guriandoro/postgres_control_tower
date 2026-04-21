@@ -3,17 +3,22 @@
 # mounted volumes, then exec patroni as the postgres user.
 #
 # Required env vars (compose sets them per-service):
-#   PATRONI_SCOPE        — cluster name (e.g. "ha-demo")
-#   PATRONI_NAME         — node name   (e.g. "patroni-1")
-#   PATRONI_ETCD_HOSTS   — comma-separated etcd peers (e.g. "etcd:2379")
+#   PATRONI_SCOPE         — cluster name (e.g. "ha-demo")
+#   PATRONI_NAME          — node name   (e.g. "patroni-1")
+#   PATRONI_ETCD3_HOSTS   — comma-separated etcd peers (e.g. "etcd:2379")
+#
+# We deliberately use PATRONI_ETCD3_HOSTS (v3 API) and not PATRONI_ETCD_HOSTS:
+# Patroni reads PATRONI_ETCD*_HOSTS env vars and auto-configures the
+# matching DCS, and the v2 variant would override our YAML's etcd3 block
+# and try to talk to etcd's v2 endpoint (disabled by default since 3.4).
 
 set -euo pipefail
 
 : "${PATRONI_SCOPE:?must be set}"
 : "${PATRONI_NAME:?must be set}"
-: "${PATRONI_ETCD_HOSTS:?must be set}"
+: "${PATRONI_ETCD3_HOSTS:?must be set}"
 
-export PATRONI_SCOPE PATRONI_NAME PATRONI_ETCD_HOSTS
+export PATRONI_SCOPE PATRONI_NAME PATRONI_ETCD3_HOSTS
 
 envsubst < /etc/patroni/patroni.yml.tmpl > /etc/patroni/patroni.yml
 chown postgres:postgres /etc/patroni/patroni.yml

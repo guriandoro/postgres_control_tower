@@ -158,7 +158,11 @@ services:
     environment:
       PATRONI_SCOPE: ha-demo
       PATRONI_NAME: patroni-1
-      PATRONI_ETCD_HOSTS: etcd:2379
+      # Patroni recognises PATRONI_ETCD*_HOSTS env vars and auto-configures
+      # the matching DCS. Use the v3 (etcd3) variant — etcd 3.5+ disables
+      # the legacy v2 API by default, so PATRONI_ETCD_HOSTS would yield
+      # "Failed to get list of machines from .../v2" 404s.
+      PATRONI_ETCD3_HOSTS: etcd:2379
       TZ: UTC
     volumes:
       - patroni-1-data:/var/lib/postgresql/16/data
@@ -179,7 +183,7 @@ services:
     environment:
       PATRONI_SCOPE: ha-demo
       PATRONI_NAME: patroni-2
-      PATRONI_ETCD_HOSTS: etcd:2379
+      PATRONI_ETCD3_HOSTS: etcd:2379
       TZ: UTC
     volumes:
       - patroni-2-data:/var/lib/postgresql/16/data
