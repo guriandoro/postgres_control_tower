@@ -42,23 +42,29 @@ export class ApiError extends Error {
 
 export type QueryValue = string | number | boolean | undefined | null;
 
-interface RequestOptions {
+interface RequestOptions<Q extends object = Record<string, QueryValue>> {
   method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   body?: unknown;
-  /** Query string values; undefined/null/"" entries are dropped. */
-  query?: { [key: string]: QueryValue };
+  /**
+   * Query string values; undefined/null/"" entries are dropped.
+   *
+   * Typed as a generic ``object`` so callers can pass typed filter
+   * interfaces directly without TypeScript demanding a string index
+   * signature on the interface itself.
+   */
+  query?: Q;
   /** When true, send the body as URL-encoded form (used by /auth/login). */
   form?: boolean;
 }
 
-export async function apiRequest<T>(
+export async function apiRequest<T, Q extends object = Record<string, QueryValue>>(
   path: string,
-  opts: RequestOptions = {},
+  opts: RequestOptions<Q> = {},
 ): Promise<T> {
   const { method = "GET", body, query, form } = opts;
   const url = new URL(path, window.location.origin);
   if (query) {
-    for (const [k, v] of Object.entries(query)) {
+    for (const [k, v] of Object.entries(query as Record<string, unknown>)) {
       if (v !== undefined && v !== null && v !== "") {
         url.searchParams.set(k, String(v));
       }
