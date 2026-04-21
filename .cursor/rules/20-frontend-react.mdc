@@ -1,0 +1,89 @@
+---
+description: React 18 + Vite + TypeScript + Tailwind + shadcn/ui + TanStack Query conventions for the web app.
+globs:
+  - "web/**/*.{ts,tsx,js,jsx,css}"
+  - "web/package.json"
+  - "web/vite.config.*"
+  - "web/tailwind.config.*"
+  - "web/tsconfig*.json"
+alwaysApply: false
+---
+
+# Frontend (web/) — React 18 + Vite + TS + shadcn/ui
+
+Adapted from `awesome-cursorrules/cursor-ai-react-typescript-shadcn-ui`
+and `react-query`, trimmed to match the locked stack in `00-project.mdc`.
+
+> **Important:** this app is plain Vite + React. We do **not** use Next.js,
+> the App Router, `use client`, server components, or SSR. Ignore any
+> generic advice that mentions them.
+
+## Style and structure
+
+- Functional components only. No class components.
+- TypeScript everywhere. Prefer `interface` over `type` for object shapes
+  unless you need a union/mapped type.
+- Avoid `enum`s; use `as const` maps or string literal unions.
+- Lowercase-with-dashes for directories (`components/cluster-card`,
+  `pages/logs-surgeon`). PascalCase for React component filenames is fine
+  (`ClusterCard.tsx`).
+- Co-locate component, its styles, and its tests. Keep one exported
+  component per file unless they're tightly coupled subcomponents.
+- Favor named exports over default exports.
+
+## UI and styling
+
+- Tailwind CSS, mobile-first. Compose with `clsx` / `cn` (the standard
+  shadcn helper) instead of conditional class strings.
+- Use shadcn/ui primitives (`Button`, `Card`, `Dialog`, `Table`, etc.)
+  before reaching for ad-hoc markup. Generate new shadcn components into
+  `web/src/components/ui/` via the shadcn CLI and check them in.
+- Dark mode is the default; verify both modes look correct.
+- Charts use **Recharts** (sparklines, retention Gantt, WAL timeline).
+  Don't introduce additional chart libraries.
+
+## Data fetching — TanStack Query
+
+- One `QueryClient` + `QueryClientProvider` at the app root.
+- Wrap every server interaction in a custom hook under
+  `web/src/hooks/queries/` or `web/src/hooks/mutations/`. Pages and
+  components must not call `useQuery` / `useMutation` inline.
+- Use stable, structured query keys: `['clusters', clusterId, 'wal']`.
+  Centralize key factories per domain in `web/src/api/keys.ts` (or similar)
+  to keep invalidation correct.
+- Implement loading and error states for every query. The "Logs Surgeon"
+  view auto-refreshes every 5 minutes; an "Instant Snap" button forces a
+  refetch.
+- Use `staleTime` deliberately. Use `invalidateQueries` after mutations.
+- Optimistic updates only for low-risk UX (e.g. ack alert). Never for
+  pgBackRest job submission.
+- Enable React Query DevTools in dev builds.
+
+## Routing and pages
+
+- Pages live in `web/src/pages/`: `Dashboard.tsx`, `Cluster.tsx`,
+  `Logs.tsx`, `Jobs.tsx`, `Alerts.tsx`, `Login.tsx`.
+- Use a small router (React Router v6) — no Next.js router.
+
+## Auth
+
+- UI talks to manager via `/api/v1/...`. Bearer JWT (HS256) in
+  `Authorization`. Store the token in memory + `localStorage`; clear on
+  401.
+- Don't roll your own crypto. Don't decode the JWT on the client beyond
+  reading `exp` for soft logout.
+
+## Performance
+
+- Code-split routes with `React.lazy` + `Suspense`.
+- Memoize expensive Recharts datasets with `useMemo`. Avoid re-rendering
+  the whole logs stream on every poll — virtualize long lists.
+- Optimize images (WebP, explicit dimensions, lazy loading).
+
+## Things to avoid
+
+- No DaisyUI, no Material UI, no Chakra. shadcn/ui + Tailwind only.
+- No Redux, MobX, Zustand, or Recoil. Local state + TanStack Query covers
+  v1. Add a state lib only with explicit justification.
+- No `any`. Use `unknown` + a type guard if the shape is genuinely dynamic.
+- No inline `fetch` in components. Go through the typed `api/` client.

@@ -1,0 +1,108 @@
+---
+description: Postgres Control Tower — project-specific facts, locked stack, and v1 scope. Always loaded.
+alwaysApply: true
+---
+
+# Postgres Control Tower — Project Rules
+
+This is the authoritative summary of decisions in `PLAN.md`. When generic
+best-practices conflict with anything here, **this file wins**. If `PLAN.md`
+changes, update this file too.
+
+## What we are building
+
+A centralized control plane for fleets of PostgreSQL clusters managed with
+pgBackRest, plus a unified multi-source log collector (PostgreSQL, pgBackRest,
+Patroni, etcd, OS/journald). Three deployable units in v1: **manager image**,
+**agent image**, **postgres**. Nothing else.
+
+## Locked tech stack (do not introduce alternatives)
+
+- **Backend (manager + agent):** Python 3.12, FastAPI, SQLAlchemy 2.x,
+  Alembic, Pydantic v2, APScheduler, httpx, uvicorn.
+- **DB:** PostgreSQL 16, single instance. Native partitioning for `logs.events`.
+  Two schemas: `pct` (metadata) and `logs` (high volume).
+- **Frontend:** React 18, Vite, TypeScript, TailwindCSS, shadcn/ui (dark mode
+  default), TanStack Query, Recharts.
+- **Auth:** UI uses JWT (HS256, manager-issued). Agents use a Bearer token
+  issued at registration and **stored hashed** at rest.
+- **Packaging:** `pip` + `pyproject.toml`. Multi-stage Dockerfiles. Docker
+  Compose for the demo.
+
+## Explicitly excluded from v1 (do not suggest, do not add)
+
+- **No Redis, no Celery.** Background work is APScheduler in the manager plus
+  a `pct.jobs` table that agents long-poll.
+- **No Loki, no Vector.** Logs land in `logs.events` in the same Postgres,
+  partitioned monthly.
+- **No Nginx.** Uvicorn is fine for the prototype.
+- **No mTLS / no PKI.** v1 is HTTPS + per-agent pre-shared bearer token.
+  mTLS, RBAC roles beyond viewer/admin, and confirmation modals belong in
+  `docs/hardening.md` as the v2 path.
+- **No Next.js, no SSR, no App Router.** Plain Vite + React, served as
+  static assets by the manager FastAPI process.
+- **No Go.** Python end-to-end.
+- **Out of scope for v1:** PITR restore UI, stanza-delete, config push & drift
+  detection, "type cluster name to confirm" modals, PagerDuty/Teams notifiers,
+  multi-tenant, S3 log archival.
+
+## Communication model (don't break this)
+
+- Agents always initiate. DB hosts need **no inbound ports**.
+- Endpoints (versioned under `/api/v1`):
+  - `POST /agents/register` — initial enrollment with shared token.
+  - `POST /agents/heartbeat` — status + WAL health snapshot + `clock_skew_ms`.
+  - `POST /logs/ingest` — batched, UTC-normalized log records.
+  - `GET  /jobs/next` — long-poll for pending jobs.
+  - `POST /jobs/{id}/result` — return job stdout/exit code.
+- UTC normalization happens **at the agent**, using host TZ + NTP-reported
+  skew. Always ship `clock_skew_ms` with each heartbeat.
+
+## Job kinds — allowlist (defense in depth)
+
+Allowed in v1, enforced in **both** manager API and agent runner:
+
+- `backup_full`, `backup_diff`, `backup_incr`
+- `check`
+- `stanza_create`
+
+`restore`, `stanza_delete`, and any other destructive op are **blocked at the
+agent level**, not just hidden in the UI. Do not add them to the agent runner
+under any circumstances in v1.
+
+## Data model anchors
+
+- Schema `pct`: `clusters`, `agents`, `pgbackrest_info`, `wal_health`, `jobs`,
+  `alerts`, `users`.
+- Schema `logs`: `logs.events` (partitioned monthly, btree on
+  `(agent_id, ts_utc)`, GIN on `parsed`), `logs.role_transitions`.
+- `users.role` is one of `viewer` | `admin` only.
+- `agents.role` is one of `primary` | `replica` | `unknown`.
+- `clusters.kind` is one of `standalone` | `patroni`.
+
+## Repo layout
+
+```
+manager/pct_manager/        FastAPI app + scheduler + ingest + alerter
+manager/alembic/            migrations
+agent/pct_agent/            collectors/, runner.py, shipper.py
+web/                        Vite + React + Tailwind + shadcn/ui
+docs/                       all documentation
+deploy/docker/              Dockerfiles
+deploy/compose/             docker-compose.yml + patroni configs + seeds
+deploy/scripts/             bootstrap.sh, teardown.sh, demo-failures.sh
+PLAN.md                     authoritative implementation plan
+```
+
+## Configuration
+
+All env vars are prefixed `PCT_`. See `.env.example`. Never read unprefixed
+env vars in app code; always go through the settings module.
+
+## Phase awareness
+
+Work follows the P1–P9 checklist in `PLAN.md`. Don't introduce code for a
+later phase while an earlier one is incomplete unless explicitly asked. When
+in doubt about whether something belongs in v1 or v2, default to v1 minimum
+viable and document the v2 idea in `docs/hardening.md` or
+`docs/conflicts-resolved.md`.

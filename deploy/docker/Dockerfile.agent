@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1.7
+#
+# Postgres Control Tower — Agent image.
+#
+# Used as a sidecar to each PostgreSQL container. Ships with:
+#   - Python 3.12 + pct-agent package
+#   - pgbackrest CLI (so the runner can execute backup/check/stanza-create)
+#   - libpq + psql for libpq-based collectors and ad-hoc debugging
+#   - systemd-journal-remote so the OS collector can read journald entries
+#     when /run/log/journal is mounted from the host (optional)
+#
+# Build context is the repo root.
+
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# pgbackrest needs the postgresql-common apt repo for the latest version
+# pinned to PG16. We install:
+#   - pgbackrest (the agent runs `pgbackrest backup` etc.)
+#   - postgresql-client-16 (psql, libpq for collectors/wal.py)
+#   - tini (PID 1) and curl (healthcheck)
+#   - gosu (drop privileges to the pct-agent user in the entrypoint)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg lsb-release tini gosu \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+        https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends pgbackrest postgresql-client-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create the unprivileged user the agent runs as. UID 1000 matches the
+# convention used elsewhere; the compose file mounts shared volumes with
+# this UID where needed (see deploy/compose/README for the exact list).
+RUN groupadd --system --gid 1000 pct-agent \
+    && useradd --system --uid 1000 --gid 1000 \
+        --home-dir /var/lib/pct-agent --shell /usr/sbin/nologin pct-agent \
+    && install -d -o pct-agent -g pct-agent -m 0750 \
+        /var/lib/pct-agent /var/lib/pct-agent/spool /etc/pct-agent
+
+WORKDIR /app
+
+COPY agent/pyproject.toml ./agent/pyproject.toml
+RUN pip install --upgrade pip
+RUN pip install ./agent
+
+COPY agent/ ./agent/
+RUN pip install --no-deps -e ./agent
+
+COPY deploy/docker/entrypoint-agent.sh /usr/local/bin/entrypoint-agent.sh
+RUN chmod +x /usr/local/bin/entrypoint-agent.sh
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=10 \
+    CMD curl -fsS http://127.0.0.1:8081/healthz || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-agent.sh"]
+CMD ["pct-agent", "run"]

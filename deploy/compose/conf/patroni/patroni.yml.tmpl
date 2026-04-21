@@ -1,0 +1,90 @@
+# Patroni config template — variables substituted by entrypoint.sh
+# (envsubst). One image, two compose services (patroni-1 / patroni-2),
+# each with its own PATRONI_NAME.
+
+scope: ${PATRONI_SCOPE}
+name: ${PATRONI_NAME}
+namespace: /pct/
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: ${PATRONI_NAME}:8008
+
+etcd3:
+  hosts: ${PATRONI_ETCD_HOSTS}
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        max_connections: 50
+        shared_buffers: 256MB
+        wal_level: replica
+        hot_standby: on
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_log_hints: on
+        archive_mode: on
+        archive_timeout: 60
+        archive_command: 'pgbackrest --stanza=ha-demo archive-push %p'
+        timezone: 'UTC'
+        log_timezone: 'UTC'
+        logging_collector: on
+        log_directory: '/var/log/postgresql'
+        log_filename: 'postgresql-%Y-%m-%d_%H%M%S.log'
+        log_line_prefix: '%t [%p]: '
+        log_min_messages: info
+        log_statement: 'ddl'
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+  pg_hba:
+    - host replication replicator 0.0.0.0/0 trust
+    - host all all 0.0.0.0/0 trust
+
+  users:
+    replicator:
+      password: replicator
+      options:
+        - replication
+    pct_demo:
+      password: pct_demo
+      options:
+        - createdb
+
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: ${PATRONI_NAME}:5432
+  data_dir: /var/lib/postgresql/16/data
+  bin_dir: /usr/lib/postgresql/16/bin
+  pgpass: /tmp/pgpass
+  authentication:
+    superuser:
+      username: postgres
+      password: postgres
+    replication:
+      username: replicator
+      password: replicator
+  parameters:
+    unix_socket_directories: '/var/run/postgresql'
+
+log:
+  dir: /var/log/patroni
+  level: INFO
+  format: '%(asctime)s %(levelname)s: %(message)s'
+  file_size: 25000000
+  file_num: 4
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

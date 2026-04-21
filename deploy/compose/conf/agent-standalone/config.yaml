@@ -1,0 +1,35 @@
+# pct-agent config for the sidecar of `pg-standalone`.
+#
+# Most knobs are also available via PCT_AGENT_* env vars; we keep them
+# here so the file survives a container restart and so the operator can
+# inspect what the agent thinks it's doing without `docker exec env`.
+
+manager_url: http://manager:8080
+heartbeat_interval: 30
+
+# Probe Postgres over TCP (same compose network).
+pg_dsn: "postgresql://postgres@pg-standalone:5432/postgres"
+wal_interval: 30
+
+# pgBackRest binary + the same stanza name as conf/standalone/pgbackrest.conf.
+pgbackrest_bin: pgbackrest
+pgbackrest_stanza: demo
+pgbackrest_interval: 60
+
+# Log paths — these live on shared volumes mounted from the pg container.
+pg_log_paths: /var/log/postgresql/postgresql-*.log
+pgbackrest_log_paths: /var/log/pgbackrest/demo-backup.log,/var/log/pgbackrest/demo-archive-push.log
+
+# Patroni / etcd are not in the standalone box.
+patroni_log_paths: ""
+etcd_log_paths: ""
+
+# Shipper tuning.
+shipper_batch_size: 200
+shipper_flush_interval: 5.0
+spool_dir: /var/lib/pct-agent/spool
+
+# Job runner — accept jobs queued via /api/v1/jobs.
+runner_long_poll_seconds: 25
+runner_job_timeout_seconds: 21600
+runner_stdout_tail_chars: 16000

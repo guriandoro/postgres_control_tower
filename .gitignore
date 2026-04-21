@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.env.local
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / web (P5)
+node_modules/
+web/dist/
+web/.vite/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local agent state
+agent-spool/
+*.token

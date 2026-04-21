@@ -1,0 +1,26 @@
+# pct-agent config for the sidecar of `patroni-1`.
+
+manager_url: http://manager:8080
+heartbeat_interval: 30
+
+pg_dsn: "postgresql://postgres@patroni-1:5432/postgres"
+wal_interval: 30
+
+pgbackrest_bin: pgbackrest
+pgbackrest_stanza: ha-demo
+pgbackrest_interval: 60
+
+pg_log_paths: /var/log/postgresql/postgresql-*.log
+pgbackrest_log_paths: /var/log/pgbackrest/ha-demo-backup.log,/var/log/pgbackrest/ha-demo-archive-push.log
+patroni_log_paths: /var/log/patroni/patroni.log
+# etcd runs in its own container; we tail it from there via os journald
+# (compose doesn't bind-mount etcd's logs into this agent).
+etcd_log_paths: ""
+
+shipper_batch_size: 200
+shipper_flush_interval: 5.0
+spool_dir: /var/lib/pct-agent/spool
+
+runner_long_poll_seconds: 25
+runner_job_timeout_seconds: 21600
+runner_stdout_tail_chars: 16000

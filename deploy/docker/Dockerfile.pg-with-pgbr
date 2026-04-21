@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.7
+#
+# Standalone PostgreSQL 16 + pgBackRest, sized for the demo.
+#
+# Layered on top of the official postgres:16 image so we still get the
+# upstream entrypoint (initdb, healthchecks, /docker-entrypoint-initdb.d).
+# We add:
+#   - pgbackrest CLI
+#   - a postgresql.conf snippet that enables logging_collector + UTC TZ +
+#     archive_mode/archive_command pointing at pgbackrest
+#   - an init script that runs `pgbackrest stanza-create` once the cluster
+#     is up
+#
+# Postgres logs land in /var/log/postgresql; pgbackrest logs land in
+# /var/log/pgbackrest. Both directories are tailed by the sibling agent
+# via a shared volume (see deploy/compose/docker-compose.yml).
+
+FROM postgres:16-bookworm
+
+ENV PG_LOG_DIR=/var/log/postgresql \
+    PGBACKREST_LOG_DIR=/var/log/pgbackrest \
+    PGBACKREST_REPO=/var/lib/pgbackrest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl pgbackrest tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN install -d -o postgres -g postgres -m 0755 \
+        "$PG_LOG_DIR" "$PGBACKREST_LOG_DIR" "$PGBACKREST_REPO"
+
+# Drop in a postgresql.conf overlay loaded via /etc/postgresql/conf.d/.
+# We use an `include_dir` from a custom config_file we set in the compose
+# `command:`. Files copied here are read-only baseline; the compose file
+# can also bind-mount its own to override.
+COPY deploy/compose/conf/standalone/postgresql.conf /etc/postgresql/postgresql.conf
+COPY deploy/compose/conf/standalone/pg_hba.conf     /etc/postgresql/pg_hba.conf
+COPY deploy/compose/conf/standalone/pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
+
+# initdb-time scripts: create the demo role + database; pgBackRest stanza
+# is created by a separate one-shot service after PG is up so the
+# archive_command has had a chance to push its first segment.
+COPY deploy/compose/conf/standalone/01-init.sh /docker-entrypoint-initdb.d/01-init.sh
+RUN chmod +x /docker-entrypoint-initdb.d/01-init.sh
+
+VOLUME ["/var/lib/postgresql/data", "/var/lib/pgbackrest", \
+        "/var/log/postgresql", "/var/log/pgbackrest"]
+
+# The official postgres image already runs as `postgres` and already has
+# tini-equivalent logic in docker-entrypoint.sh; we don't override the
+# entrypoint here. We just override the command so PG reads our config.
+CMD ["postgres", \
+     "-c", "config_file=/etc/postgresql/postgresql.conf", \
+     "-c", "hba_file=/etc/postgresql/pg_hba.conf"]

@@ -1,0 +1,98 @@
+---
+description: Python / FastAPI / SQLAlchemy 2.x / Pydantic v2 / Alembic conventions for manager and agent.
+globs:
+  - "manager/**/*.py"
+  - "agent/**/*.py"
+  - "manager/pyproject.toml"
+  - "agent/pyproject.toml"
+  - "manager/alembic.ini"
+alwaysApply: false
+---
+
+# Backend (manager + agent) — Python 3.12 + FastAPI
+
+Adapted from `awesome-cursorrules/python-fastapi-best-practices`, trimmed
+to match the locked stack in `00-project.mdc`.
+
+## Style and structure
+
+- Write concise, technical Python with type hints on every public signature.
+- Prefer functional and declarative patterns. Use classes only where they
+  earn their keep (Pydantic models, SQLAlchemy mappers, ABCs like `Notifier`,
+  collectors that hold non-trivial state).
+- Iterate and modularize over duplicating code. Extract helpers freely.
+- Descriptive names with auxiliary verbs: `is_active`, `has_permission`,
+  `should_retry`, `was_archived`.
+- Lowercase with underscores for files and directories
+  (e.g. `routes/agents.py`, `collectors/pgbackrest.py`).
+- Prefer named exports for routes and utility functions.
+- Use the **RORO pattern** (Receive an Object, Return an Object) for any
+  function with more than two semantically related inputs or outputs.
+- Use `def` for pure / synchronous functions and `async def` for I/O-bound
+  ones. Don't make a function `async` if it never awaits.
+
+## FastAPI
+
+- Use Pydantic v2 `BaseModel` for **all** request and response schemas; never
+  return raw dicts from a route.
+- Annotate every route with an explicit `response_model=...` or return type.
+- Raise `HTTPException` for expected errors and model them as specific HTTP
+  responses. Use middleware for unexpected errors, logging, and tracing.
+- Prefer `lifespan` context managers over the deprecated `@app.on_event`
+  hooks for startup/shutdown wiring (DB pool, scheduler, shipper).
+- Use FastAPI's dependency injection (`Depends`) for the DB session, current
+  user (UI JWT), current agent (bearer token), and settings.
+- Mount versioned API under `/api/v1/...`. Do not introduce other prefixes.
+
+## Async and I/O
+
+- Minimize blocking I/O inside async paths. Use the async SQLAlchemy 2.x
+  API (`AsyncSession`, `async_sessionmaker`) and `httpx.AsyncClient` for
+  outbound HTTP.
+- Never call `time.sleep` in an async function; use `asyncio.sleep`.
+- For agent collectors, prefer `asyncio.gather` over thread pools.
+
+## SQLAlchemy 2.x + Alembic
+
+- Use the **2.0-style** API: `select(...)`, `session.execute(...)`, typed
+  `Mapped[...]` declarative models. No legacy `Query` API.
+- One model per file is fine; group related models when it aids readability.
+- Every schema change ships with an Alembic migration. Manual edits to
+  `alembic/versions/*.py` are expected; do not auto-generate and commit
+  without review.
+- Respect the schema split: metadata tables live in `pct`, log tables in
+  `logs`. Set `__table_args__ = {"schema": "pct"}` (or `"logs"`) explicitly.
+
+## Error handling
+
+- Handle errors at the **start** of functions with early returns. Use guard
+  clauses; avoid deeply nested `if`s.
+- Log with `logging` (not `print`). Use module-level loggers
+  (`logger = logging.getLogger(__name__)`).
+- Define custom exception types for domain errors
+  (e.g. `JobKindNotAllowed`, `AgentNotEnrolled`) and translate them to
+  `HTTPException` at the route boundary.
+
+## Configuration
+
+- Pydantic-settings (`BaseSettings`) with `env_prefix="PCT_"`. Never read
+  `os.environ` directly in app code.
+- Defaults in `Settings`; secrets only via env / `.env`.
+
+## Testing
+
+- `pytest` + `pytest-asyncio`. One test module per source module when
+  practical.
+- Use `httpx.AsyncClient` against the FastAPI app for route tests; spin up a
+  throwaway Postgres (or `pytest-postgresql`) for DB tests rather than
+  mocking SQLAlchemy.
+
+## Things to avoid
+
+- Don't introduce Redis, Celery, RQ, Dramatiq, or any other external broker.
+  See `00-project.mdc`.
+- Don't add `fastapi-users`, `fastapi-jwt-auth`, `fastapi-cache`,
+  `fastapi-limiter`, or `fastapi-pagination`. Auth and pagination are
+  hand-rolled and minimal in v1.
+- Don't reach for ORMs other than SQLAlchemy 2.x.
+- Don't add `poetry`. The project uses `pip` + `pyproject.toml`.

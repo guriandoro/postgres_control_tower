@@ -1,0 +1,265 @@
+# Postgres Control Tower — one-command demo.
+#
+# Topology:
+#
+#   manager  ──┬──> mgr-db (PG16, control-plane store)
+#              │
+#              ├──< pct-agent-standalone ──> pg-standalone   (cluster: standalone)
+#              │
+#              └──< pct-agent-patroni-1  ──> patroni-1  ──┐
+#                   pct-agent-patroni-2  ──> patroni-2  ──┴── etcd  (cluster: ha-demo)
+#
+# All long-running services have a healthcheck so `bootstrap.sh` can wait
+# for them deterministically. All shared state is on named volumes; the
+# `teardown.sh` and `reset.sh` scripts drop them when needed.
+#
+# Build context for every image is the **repo root** (../..) because
+# Dockerfile.manager / Dockerfile.agent need access to both `manager/`
+# and `web/` and `agent/`.
+
+name: pct-demo
+
+x-mgr-env: &mgr-env
+  PCT_DATABASE_URL: postgresql+psycopg://${PCT_MGR_DB_USER:-pct}:${PCT_MGR_DB_PASSWORD:-pct}@mgr-db:5432/${PCT_MGR_DB_NAME:-pct}
+  PCT_JWT_SECRET: ${PCT_JWT_SECRET:-demo-jwt-secret-please-change}
+  PCT_ENROLLMENT_TOKEN: ${PCT_ENROLLMENT_TOKEN:-demo-enrollment-token-please-change}
+  PCT_BOOTSTRAP_ADMIN_EMAIL: ${PCT_BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
+  PCT_BOOTSTRAP_ADMIN_PASSWORD: ${PCT_BOOTSTRAP_ADMIN_PASSWORD:-admin}
+  PCT_CORS_ALLOW_ORIGINS: "http://localhost:8080,http://localhost:5173"
+  PCT_LOG_RETENTION_DAYS: "7"
+  PCT_SLACK_WEBHOOK_URL: ${PCT_SLACK_WEBHOOK_URL:-}
+  PCT_SMTP_HOST: ${PCT_SMTP_HOST:-}
+  PCT_SMTP_TO: ${PCT_SMTP_TO:-}
+
+x-agent-env: &agent-env
+  PCT_AGENT_MANAGER_URL: http://manager:8080
+  PCT_AGENT_ENROLLMENT_TOKEN: ${PCT_ENROLLMENT_TOKEN:-demo-enrollment-token-please-change}
+  PCT_AGENT_CONFIG_PATH: /etc/pct-agent/config.yaml
+  PCT_AGENT_STATE_DIR: /var/lib/pct-agent
+
+services:
+
+  # ---------------- control plane ----------------
+
+  mgr-db:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_USER: ${PCT_MGR_DB_USER:-pct}
+      POSTGRES_PASSWORD: ${PCT_MGR_DB_PASSWORD:-pct}
+      POSTGRES_DB: ${PCT_MGR_DB_NAME:-pct}
+      TZ: UTC
+    volumes:
+      - mgr-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  manager:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.manager
+    image: pct/manager:dev
+    environment:
+      <<: *mgr-env
+    ports:
+      - "8080:8080"
+    depends_on:
+      mgr-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ---------------- HA discovery ----------------
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.13
+    command:
+      - etcd
+      - --name=etcd
+      - --data-dir=/var/lib/etcd
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd=http://etcd:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=pct-demo
+    environment:
+      ETCD_ENABLE_V2: "false"
+    volumes:
+      - etcd-data:/var/lib/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------- standalone cluster ----------------
+
+  pg-standalone:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.pg-with-pgbr
+    image: pct/pg-with-pgbr:dev
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      TZ: UTC
+    volumes:
+      - pg-standalone-data:/var/lib/postgresql/data
+      - pg-standalone-pglogs:/var/log/postgresql
+      - pgbr-standalone-repo:/var/lib/pgbackrest
+      - pgbr-standalone-logs:/var/log/pgbackrest
+      - pg-standalone-socket:/var/run/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  pct-agent-standalone:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.agent
+    image: pct/agent:dev
+    environment:
+      <<: *agent-env
+      PCT_AGENT_CLUSTER_NAME: standalone
+      PCT_AGENT_CLUSTER_KIND: standalone
+      PCT_AGENT_HOSTNAME: pg-standalone
+    volumes:
+      - ./conf/agent-standalone/config.yaml:/etc/pct-agent/config.yaml:ro
+      - ./conf/standalone/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
+      - pg-standalone-data:/var/lib/postgresql/data:ro
+      - pg-standalone-pglogs:/var/log/postgresql:ro
+      - pgbr-standalone-repo:/var/lib/pgbackrest
+      - pgbr-standalone-logs:/var/log/pgbackrest
+      - pg-standalone-socket:/var/run/postgresql
+      - agent-standalone-state:/var/lib/pct-agent
+    depends_on:
+      manager:
+        condition: service_healthy
+      pg-standalone:
+        condition: service_healthy
+
+  # ---------------- HA cluster (Patroni + etcd) ----------------
+
+  patroni-1:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.patroni
+    image: pct/patroni:dev
+    environment:
+      PATRONI_SCOPE: ha-demo
+      PATRONI_NAME: patroni-1
+      PATRONI_ETCD_HOSTS: etcd:2379
+      TZ: UTC
+    volumes:
+      - patroni-1-data:/var/lib/postgresql/16/data
+      - patroni-1-pglogs:/var/log/postgresql
+      - patroni-1-patroni-logs:/var/log/patroni
+      - pgbr-ha-repo:/var/lib/pgbackrest
+      - pgbr-ha-logs:/var/log/pgbackrest
+      - patroni-1-socket:/var/run/postgresql
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  patroni-2:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.patroni
+    image: pct/patroni:dev
+    environment:
+      PATRONI_SCOPE: ha-demo
+      PATRONI_NAME: patroni-2
+      PATRONI_ETCD_HOSTS: etcd:2379
+      TZ: UTC
+    volumes:
+      - patroni-2-data:/var/lib/postgresql/16/data
+      - patroni-2-pglogs:/var/log/postgresql
+      - patroni-2-patroni-logs:/var/log/patroni
+      - pgbr-ha-repo:/var/lib/pgbackrest
+      - pgbr-ha-logs:/var/log/pgbackrest
+      - patroni-2-socket:/var/run/postgresql
+    depends_on:
+      etcd:
+        condition: service_healthy
+      patroni-1:
+        condition: service_started
+
+  pct-agent-patroni-1:
+    image: pct/agent:dev
+    environment:
+      <<: *agent-env
+      PCT_AGENT_CLUSTER_NAME: ha-demo
+      PCT_AGENT_CLUSTER_KIND: patroni
+      PCT_AGENT_HOSTNAME: patroni-1
+    volumes:
+      - ./conf/agent-patroni-1/config.yaml:/etc/pct-agent/config.yaml:ro
+      - ./conf/patroni/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
+      - patroni-1-data:/var/lib/postgresql/16/data:ro
+      - patroni-1-pglogs:/var/log/postgresql:ro
+      - patroni-1-patroni-logs:/var/log/patroni:ro
+      - pgbr-ha-repo:/var/lib/pgbackrest
+      - pgbr-ha-logs:/var/log/pgbackrest
+      - patroni-1-socket:/var/run/postgresql
+      - agent-patroni-1-state:/var/lib/pct-agent
+    depends_on:
+      manager:
+        condition: service_healthy
+      patroni-1:
+        condition: service_healthy
+
+  pct-agent-patroni-2:
+    image: pct/agent:dev
+    environment:
+      <<: *agent-env
+      PCT_AGENT_CLUSTER_NAME: ha-demo
+      PCT_AGENT_CLUSTER_KIND: patroni
+      PCT_AGENT_HOSTNAME: patroni-2
+    volumes:
+      - ./conf/agent-patroni-2/config.yaml:/etc/pct-agent/config.yaml:ro
+      - ./conf/patroni/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
+      - patroni-2-data:/var/lib/postgresql/16/data:ro
+      - patroni-2-pglogs:/var/log/postgresql:ro
+      - patroni-2-patroni-logs:/var/log/patroni:ro
+      - pgbr-ha-repo:/var/lib/pgbackrest
+      - pgbr-ha-logs:/var/log/pgbackrest
+      - patroni-2-socket:/var/run/postgresql
+      - agent-patroni-2-state:/var/lib/pct-agent
+    depends_on:
+      manager:
+        condition: service_healthy
+      patroni-2:
+        condition: service_healthy
+
+volumes:
+  mgr-db-data:
+  etcd-data:
+
+  pg-standalone-data:
+  pg-standalone-pglogs:
+  pg-standalone-socket:
+  pgbr-standalone-repo:
+  pgbr-standalone-logs:
+  agent-standalone-state:
+
+  patroni-1-data:
+  patroni-1-pglogs:
+  patroni-1-patroni-logs:
+  patroni-1-socket:
+  patroni-2-data:
+  patroni-2-pglogs:
+  patroni-2-patroni-logs:
+  patroni-2-socket:
+  pgbr-ha-repo:
+  pgbr-ha-logs:
+  agent-patroni-1-state:
+  agent-patroni-2-state:

@@ -1,0 +1,96 @@
+---
+description: Conventional Commits and PR template guidance for this repo.
+alwaysApply: true
+---
+
+# Git conventions
+
+## Commit messages — Conventional Commits
+
+Use the [Conventional Commits](https://www.conventionalcommits.org/) format.
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+### Allowed types
+
+- `feat` — new user-visible feature (MINOR in semver).
+- `fix` — bug fix (PATCH in semver).
+- `docs` — documentation only.
+- `refactor` — code change that neither fixes a bug nor adds a feature.
+- `perf` — performance improvement.
+- `test` — adding or fixing tests.
+- `build` — build system, packaging, Dockerfiles, `pyproject.toml`.
+- `ci` — CI configuration.
+- `chore` — anything else (deps bump, tooling, formatting).
+
+### Scopes (this repo)
+
+Prefer one of: `manager`, `agent`, `web`, `db`, `alembic`, `deploy`,
+`docs`, `scheduler`, `ingest`, `alerter`, `auth`, `jobs`. Multi-area
+changes can omit the scope.
+
+### Breaking changes
+
+Use either `feat(api)!: ...` **or** a `BREAKING CHANGE:` footer. Be
+explicit about API surface changes (request/response shapes, env vars,
+DB schema).
+
+### Examples
+
+```
+feat(agent): heartbeat reports clock skew in milliseconds
+fix(manager): reject job kinds outside the v1 allowlist
+docs(architecture): clarify why we dropped Loki for v1
+build(deploy): multi-stage Dockerfile for the manager image
+refactor(ingest)!: switch logs.events partitioning from weekly to monthly
+
+BREAKING CHANGE: existing logs.events_YYYYWW partitions must be migrated
+to logs.events_YYYYMM. See docs/troubleshooting.md.
+```
+
+## Pull request template
+
+Adapted from `awesome-cursorrules/pr-template`. Keep PRs small and focused
+on a single phase item from `PLAN.md` when practical.
+
+```markdown
+## Purpose
+
+<!-- Why is this change needed? Link the PLAN.md phase item it advances. -->
+
+Refs: PLAN.md §X — P? <name>
+
+## Implementation notes
+
+<!-- Key design choices. Call out anything that touches the locked stack
+     (00-project.mdc) or the v1 exclusions. -->
+
+## Testing
+
+- [ ] Unit tests added/updated
+- [ ] Manual run against local Postgres
+- [ ] Manual run against the docker-compose demo (if applicable)
+
+## Impacts
+
+- [ ] DB migration included (alembic)
+- [ ] Env var added/changed (update `.env.example` and `docs/deployment.md`)
+- [ ] API surface changed (update `docs/api.md`)
+- [ ] Agent ↔ manager protocol changed (bump compat note in `docs/agent-setup.md`)
+
+## Checklist
+
+- [ ] Code follows `.cursor/rules/` conventions
+- [ ] No introduction of Redis / Celery / Loki / Vector / mTLS / Next.js
+- [ ] No new destructive job kinds in the agent runner
+- [ ] Documentation updated
+- [ ] All tests passing locally
+
+Closes #<issue>
+```
