@@ -42,24 +42,27 @@ export class ApiError extends Error {
 
 export type QueryValue = string | number | boolean | undefined | null;
 
-interface RequestOptions<Q extends object = Record<string, QueryValue>> {
+interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   body?: unknown;
   /**
-   * Query string values; undefined/null/"" entries are dropped.
+   * Query string values; ``undefined``/``null``/``""`` entries are dropped.
    *
-   * Typed as a generic ``object`` so callers can pass typed filter
-   * interfaces directly without TypeScript demanding a string index
-   * signature on the interface itself.
+   * Typed as plain ``object`` (rather than ``Record<string, QueryValue>``)
+   * so callers can pass typed filter interfaces (``AlertFilters`` etc.)
+   * directly. Interfaces in TS aren't structurally assignable to a
+   * ``Record`` with a string index signature even when every property's
+   * value type would satisfy it. Each value is coerced via ``String(v)``
+   * below, so accidental non-stringifiables degrade gracefully.
    */
-  query?: Q;
+  query?: object;
   /** When true, send the body as URL-encoded form (used by /auth/login). */
   form?: boolean;
 }
 
-export async function apiRequest<T, Q extends object = Record<string, QueryValue>>(
+export async function apiRequest<T>(
   path: string,
-  opts: RequestOptions<Q> = {},
+  opts: RequestOptions = {},
 ): Promise<T> {
   const { method = "GET", body, query, form } = opts;
   const url = new URL(path, window.location.origin);
