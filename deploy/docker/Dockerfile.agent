@@ -36,11 +36,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends pgbackrest postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create the unprivileged user the agent runs as. UID 1000 matches the
-# convention used elsewhere; the compose file mounts shared volumes with
-# this UID where needed (see deploy/compose/README for the exact list).
-RUN groupadd --system --gid 1000 pct-agent \
-    && useradd --system --uid 1000 --gid 1000 \
+# Create the unprivileged user the agent runs as. UID/GID 999 deliberately
+# matches the `postgres` user in the upstream postgres:16-bookworm image
+# and the realigned postgres user in our Dockerfile.patroni: the agent
+# shares named volumes with its sibling postgres container (PGDATA :ro,
+# pgBackRest repo, log dirs, socket dir), and pgbackrest needs to read
+# PGDATA (mode 0700) and write the repo as that uid. Aligning here avoids
+# every "Permission denied" the agent would otherwise hit when running
+# pgbackrest jobs.
+RUN groupadd --system --gid 999 pct-agent \
+    && useradd --system --uid 999 --gid 999 \
         --home-dir /var/lib/pct-agent --shell /usr/sbin/nologin pct-agent \
     && install -d -o pct-agent -g pct-agent -m 0750 \
         /var/lib/pct-agent /var/lib/pct-agent/spool /etc/pct-agent

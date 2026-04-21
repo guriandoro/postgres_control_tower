@@ -45,6 +45,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir --break-system-packages \
         "patroni[etcd3]==3.3.2" "psycopg[binary]>=3.1"
 
+# Realign the postgres user/group to uid/gid 999 so it matches the upstream
+# postgres:16-bookworm image and the sibling pct-agent container. Debian's
+# postgres-common postinst auto-assigns whatever system uid is free
+# (typically 100), which forces every shared named volume into a uid
+# mismatch and makes the agent unable to read PGDATA or write the
+# pgbackrest repo. Free uid 999 first if the slim base happens to use it.
+RUN set -eux; \
+    OLD_UID=$(id -u postgres); OLD_GID=$(id -g postgres); \
+    if getent passwd 999 >/dev/null && [ "$(getent passwd 999 | cut -d: -f1)" != postgres ]; then \
+        userdel "$(getent passwd 999 | cut -d: -f1)"; \
+    fi; \
+    if getent group 999 >/dev/null && [ "$(getent group 999 | cut -d: -f1)" != postgres ]; then \
+        groupdel "$(getent group 999 | cut -d: -f1)"; \
+    fi; \
+    groupmod -g 999 postgres; \
+    usermod -u 999 -g 999 postgres; \
+    find / -xdev -uid "$OLD_UID" -exec chown -h 999 {} +; \
+    find / -xdev -gid "$OLD_GID" -exec chgrp -h 999 {} +
+
 RUN install -d -o postgres -g postgres -m 0700 "$PGDATA" \
     && install -d -o postgres -g postgres -m 0755 \
         "$PG_LOG_DIR" "$PATRONI_LOG_DIR" "$PGBACKREST_LOG_DIR" "$PGBACKREST_REPO" \
