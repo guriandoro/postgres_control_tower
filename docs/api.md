@@ -469,8 +469,11 @@ retention timeline reads `payload[*].backup[*]`.
 ```
 
 Inserts into `pct.wal_health`. The alerter uses
-`archive_lag_seconds` for the WAL-lag rule (default threshold 15
-minutes — see [`PLAN.md` §6](../PLAN.md#6-components--responsibilities)).
+`archive_lag_seconds` for the WAL-lag rule (default thresholds: warning
+at 60s, critical at 5 minutes — tuned for the demo so a broken
+`archive_command` opens an alert in ~2 minutes; see
+[`PLAN.md` §6](../PLAN.md#6-components--responsibilities) and
+[`alerter/rules.py`](../manager/pct_manager/alerter/rules.py)).
 
 ## Health
 

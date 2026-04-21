@@ -178,8 +178,9 @@ implementation reflects the original wording:
   `/logs` page.
 - **Storage Runway** — linear regression on
   `pgbackrest_info.payload->repo->size` — `alerter/forecast.py`.
-- **WAL archive lag > 15 min** as a default trigger —
-  `alerter/rules.py::rule_wal_lag`.
+- **WAL archive lag > 60 s warn / > 5 min crit** as a default trigger —
+  `alerter/rules.py::rule_wal_lag` (originally specced at 15 min;
+  tightened so demo failure injection fires in ~2 minutes).
 - **Role & Stability Analytics** — Patroni / etcd role transitions
   rendered as a Recharts Gantt — `pages/Cluster.tsx`.
 - **Dark mode default** — Tailwind `class` strategy with `dark` on

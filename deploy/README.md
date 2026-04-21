@@ -103,7 +103,7 @@ you can watch PCT detect, alert, and (where applicable) heal:
 
 | Scenario              | What it does                                          | What to watch                                        |
 |-----------------------|-------------------------------------------------------|------------------------------------------------------|
-| `wal_lag`             | breaks `archive_command` on `pg-standalone`           | `wal_lag` alert opens within 15m; lag chart climbs   |
+| `wal_lag`             | breaks `archive_command` on `pg-standalone`           | `wal_lag` alert opens within ~2m; lag chart climbs   |
 | `failover`            | `docker compose stop patroni-1`                       | Patroni promotes `patroni-2`; role transitions logged|
 | `backup_fail`         | queues `backup_full` against a non-existent stanza    | Job ends `failed`; `backup_failed` alert opens       |
 | `clock_drift`         | sets agent container clocks 10s in the past           | `clock_drift` alert within ~60s                      |

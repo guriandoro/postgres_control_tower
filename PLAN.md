@@ -15,7 +15,7 @@ Unify the pgBackRest Nexus and Diagnostic Hub specs into one product, **Postgres
 - [x] **P4 — Log ingestion** for PG, pgBackRest, Patroni, etcd, OS/journald: tailers, UTC normalizer, shipper with disk spool, monthly partitioning, `role_transitions` derivation
 - [x] **P5 — UI read paths:** Vite + Tailwind + shadcn/ui dark, Dashboard, Cluster detail with Recharts retention timeline, Logs Surgeon view with UTC sync + RCA hints
 - [x] **P6 — Safe Ops:** `jobs` table, agent job runner, Jobs UI for Backup (Full/Diff/Incr), Check, Stanza-create with confirmation; restore/delete blocked in code
-- [x] **P7 — Alerting + clock drift:** Slack + SMTP notifiers, rule engine (backup fail, WAL lag > 15m, clock drift > 2s, role flapping), storage runway forecast
+- [x] **P7 — Alerting + clock drift:** Slack + SMTP notifiers, rule engine (backup fail, WAL lag > 60s warn / > 5m crit, clock drift > 2s, role flapping), storage runway forecast
 - [x] **P8 — Documentation:** populate `docs/` (architecture, deployment, agent-setup, log-sources, safety-and-rbac, api, hardening, troubleshooting, conflicts-resolved)
 - [x] **P9 — Docker Compose demo:** Dockerfiles for manager+agent, compose with Postgres + standalone PG + 2-node Patroni + etcd + agents, `bootstrap.sh` / `teardown.sh` / `reset.sh` / `demo-failures.sh`
 
@@ -122,7 +122,7 @@ Schema `logs` (high-volume):
 - `routes/backups.py` — fleet view, per-cluster pgBackRest info JSON.
 - `routes/jobs.py` — create, list, claim (`/next`), submit result.
 - `routes/alerts.py` — list/ack.
-- `scheduler.py` (APScheduler) — periodic: refresh forecasts, partition maintenance, evaluate alert rules (WAL lag > 15m, backup failure, clock drift > 2s, role-flapping), retention purge.
+- `scheduler.py` (APScheduler) — periodic: refresh forecasts, partition maintenance, evaluate alert rules (WAL lag > 60s warn / > 5m crit, backup failure, clock drift > 2s, role-flapping), retention purge.
 - `alerter.py` — Slack webhook + SMTP. Plug-in style (`Notifier` base class) so PagerDuty/Teams can be added later.
 
 **Agent** (`agent/pct_agent/`)

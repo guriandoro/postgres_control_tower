@@ -9,7 +9,11 @@ runtime knob is whether each rule fires at all, governed by data
 availability (no WAL samples → no WAL alerts).
 
 Rules:
-- ``wal_lag``       : latest ``wal_health.archive_lag_seconds`` > 900s
+- ``wal_lag``       : latest ``wal_health.archive_lag_seconds`` > 60s
+                     (warning), > 300s (critical). Tuned for the demo
+                     so ``demo-failures.sh wal_lag`` opens an alert
+                     within ~2 minutes (one WAL probe + one alert pass)
+                     instead of the 15-minute production-grade default.
 - ``backup_failed`` : the most recent ``pct.jobs`` row of any backup_*
                      kind for an agent finished as ``failed``
 - ``clock_drift``   : ``|agent.clock_skew_ms| > 2000`` and seen in 5m
@@ -31,7 +35,11 @@ from ..models import Agent, Job, RoleTransition, WalHealth
 log = logging.getLogger("pct_manager.alerter.rules")
 
 # Thresholds — see module docstring.
-WAL_LAG_THRESHOLD_SECONDS = 15 * 60
+# 60s warning / 300s critical keeps the demo snappy: the WAL collector
+# probes every 30s and the alerter runs every 60s, so an outage shows
+# up as a warning within ~2 minutes and escalates to critical inside 5.
+WAL_LAG_THRESHOLD_SECONDS = 60
+WAL_LAG_CRITICAL_SECONDS = 5 * 60
 CLOCK_DRIFT_THRESHOLD_MS = 2_000
 CLOCK_DRIFT_FRESH_SECONDS = 5 * 60
 FLAPPING_WINDOW_MINUTES = 10
@@ -58,7 +66,7 @@ class RuleHit:
 
 
 def rule_wal_lag(db: Session) -> list[RuleHit]:
-    """Latest WAL sample per agent; alert when archive_lag > 15m."""
+    """Latest WAL sample per agent; alert when archive_lag > 60s."""
     # Latest captured_at per agent via correlated subquery.
     latest_subq = (
         select(
@@ -86,7 +94,7 @@ def rule_wal_lag(db: Session) -> list[RuleHit]:
         hits.append(
             RuleHit(
                 kind="wal_lag",
-                severity="critical" if lag > 3600 else "warning",
+                severity="critical" if lag > WAL_LAG_CRITICAL_SECONDS else "warning",
                 cluster_id=agent.cluster_id,
                 dedup_key=f"agent:{agent.id}",
                 payload={
@@ -95,6 +103,7 @@ def rule_wal_lag(db: Session) -> list[RuleHit]:
                     "archive_lag_seconds": int(lag),
                     "captured_at": wh.captured_at.isoformat(),
                     "threshold_seconds": WAL_LAG_THRESHOLD_SECONDS,
+                    "critical_threshold_seconds": WAL_LAG_CRITICAL_SECONDS,
                 },
             )
         )

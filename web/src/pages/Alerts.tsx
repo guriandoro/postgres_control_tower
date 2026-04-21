@@ -59,8 +59,8 @@ export function AlertsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Alerts</h1>
           <p className="text-sm text-muted-foreground">
-            Rules: WAL lag &gt; 15m, backup failure, clock drift &gt; 2s, role flapping
-            (≥3 transitions in 10m). Acknowledge to silence renotifications.
+            Rules: WAL lag &gt; 60s (crit &gt; 5m), backup failure, clock drift &gt; 2s,
+            role flapping (≥3 transitions in 10m). Acknowledge to silence renotifications.
           </p>
         </div>
         <Button variant="secondary" onClick={() => alerts.refetch()}>

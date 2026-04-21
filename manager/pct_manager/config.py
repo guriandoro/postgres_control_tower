@@ -56,10 +56,10 @@ class Settings(BaseSettings):
     )
 
     # --- Alerting (P7) ---
-    # Rule engine cadence in seconds. The thresholds (15m WAL lag, 2s
-    # clock skew, 3 transitions / 10m for flapping) are deliberately
-    # hardcoded in alerter/rules.py — operators tune them by editing
-    # code, not by twiddling env vars (PLAN §6).
+    # Rule engine cadence in seconds. The thresholds (60s WAL lag warn /
+    # 5m crit, 2s clock skew, 3 transitions / 10m for flapping) are
+    # deliberately hardcoded in alerter/rules.py — operators tune them
+    # by editing code, not by twiddling env vars (PLAN §6).
     alert_eval_interval: int = 60
     # Re-notify the same OPEN alert every N seconds at most. 6h by
     # default; ack the alert in the UI to silence sooner.

@@ -140,7 +140,7 @@ case "$SCN" in
         validate_target "$TARGET"
         echo "[demo:wal_lag] Breaking archive_command on: $TARGET"
         # Point archive_command at /bin/false so every WAL segment fails.
-        # archive_lag_seconds will climb past the 15m alert threshold and
+        # archive_lag_seconds will climb past the 60s alert threshold and
         # gap_detected flips to true (last_failed_time > last_archived_time).
         for c in $(each_target "$TARGET"); do
             set_archive_command "$c" "/bin/false"
@@ -148,10 +148,9 @@ case "$SCN" in
         done
         cat <<EOF
 
-  Wait ~15 minutes (or shorten WAL_LAG_THRESHOLD_SECONDS in
-  manager/pct_manager/alerter/rules.py for a quicker demo) and watch:
+  Wait ~2 minutes (one WAL probe @ 30s + one alerter pass @ 60s) and watch:
 
-    UI -> Alerts:        new 'wal_lag' alert appears
+    UI -> Alerts:        new 'wal_lag' alert appears (warn after 60s, crit after 5m)
     UI -> Cluster page:  WAL archive lag chart climbs
 
   To recover (or run all of them at once):
@@ -181,9 +180,9 @@ EOF
   demo-insert.sh the lag will outrun the archiver and climb steadily,
   but gap_detected stays false (every push eventually succeeds).
 
-  Watch:
+  Watch (~2 min):
     UI -> Cluster page:  WAL archive lag line ramps up, no gap badge
-    UI -> Alerts:        'wal_lag' alert opens after threshold
+    UI -> Alerts:        'wal_lag' alert opens after threshold (60s)
 
   To recover:
     $0 wal_recover $TARGET
@@ -212,11 +211,11 @@ EOF
         done
         cat <<EOF
 
-  Watch:
+  Watch (~2 min):
     UI -> Cluster page:  WAL archive lag climbs, gap_detected = true
     UI -> Logs (postgres / pgbackrest source):
         "ERROR: [047]: unable to open ... Permission denied"
-    UI -> Alerts:        'wal_lag' alert opens after threshold
+    UI -> Alerts:        'wal_lag' alert opens after threshold (60s)
 
   To recover:
     $0 wal_recover $TARGET
