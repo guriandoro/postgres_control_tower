@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Trigger one of four failure scenarios in the demo so the operator can
-# watch PCT detect, alert, and (where applicable) heal.
+# Trigger one of the demo failure scenarios so the operator can watch
+# PCT detect, alert, and (where applicable) heal.
 #
 # Usage:
-#   ./deploy/scripts/demo-failures.sh wal_lag
+#   ./deploy/scripts/demo-failures.sh wal_lag            [standalone|ha-demo|all]
+#   ./deploy/scripts/demo-failures.sh wal_slow_archive   [standalone|ha-demo|all]
+#   ./deploy/scripts/demo-failures.sh wal_repo_break     [standalone|ha-demo|all]
+#   ./deploy/scripts/demo-failures.sh wal_recover        [standalone|ha-demo|all]
 #   ./deploy/scripts/demo-failures.sh failover
 #   ./deploy/scripts/demo-failures.sh backup_fail
 #   ./deploy/scripts/demo-failures.sh clock_drift
@@ -15,6 +18,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../compose"
 SCN="${1:-help}"
+TARGET="${2:-all}"
 
 # ---------- shared helpers ----------
 
@@ -35,33 +39,211 @@ login_token() {
         | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
 }
 
+validate_target() {
+    case "$1" in
+        standalone|ha-demo|all) ;;
+        *) echo "Unknown target '$1' (expected: standalone | ha-demo | all)" >&2; exit 2 ;;
+    esac
+}
+
+# Resolve the current Patroni leader so we hit the writable node.
+ha_leader() {
+    docker compose exec -T patroni-1 curl -fsS http://patroni-1:8008/cluster \
+        | python3 -c 'import json, sys
+data = json.load(sys.stdin)
+for m in data.get("members", []):
+    if m.get("role") == "leader":
+        print(m["name"])
+        sys.exit(0)
+sys.exit("no leader found")'
+}
+
+# Set archive_command on a cluster. For standalone we use ALTER SYSTEM
+# (postgresql.auto.conf) + pg_reload_conf; for HA we go through Patroni's
+# REST API so the change lands in DCS and isn't reverted on the next
+# Patroni sync. ``$2`` is the literal SQL string to assign.
+set_archive_command() {
+    local cluster="$1" cmd="$2"
+    case "$cluster" in
+        standalone)
+            docker compose exec -T -u postgres pg-standalone \
+                psql -v ON_ERROR_STOP=1 -d postgres <<-SQL
+                ALTER SYSTEM SET archive_command = '$cmd';
+                SELECT pg_reload_conf();
+SQL
+            ;;
+        ha-demo)
+            local leader; leader=$(ha_leader)
+            # PATCH merges; we only touch archive_command.
+            docker compose exec -T patroni-1 curl -fsS -X PATCH \
+                "http://${leader}:8008/config" \
+                -H 'Content-Type: application/json' \
+                -d "$(printf '{"postgresql":{"parameters":{"archive_command":"%s"}}}' "$cmd")" \
+                >/dev/null
+            # Patroni applies dynamic config within ~loop_wait (default 10s).
+            ;;
+        *) echo "set_archive_command: unsupported cluster '$cluster'" >&2; exit 2 ;;
+    esac
+}
+
+# Same as above but for resetting the repo permissions / archive_command
+# back to a working state. Standalone's postgresql.conf already carries
+# the working value so RESET is enough; HA needs us to write the
+# canonical command back through Patroni.
+restore_archive_command() {
+    local cluster="$1"
+    case "$cluster" in
+        standalone)
+            docker compose exec -T -u postgres pg-standalone \
+                psql -v ON_ERROR_STOP=1 -d postgres <<-'SQL'
+                ALTER SYSTEM RESET archive_command;
+                SELECT pg_reload_conf();
+SQL
+            ;;
+        ha-demo)
+            set_archive_command ha-demo \
+                'pgbackrest --stanza=ha-demo archive-push %p'
+            ;;
+    esac
+}
+
+# Force one WAL switch on every primary in the cluster so something
+# gets queued for the (now-broken) archive_command to chew on.
+force_wal_switch() {
+    local cluster="$1"
+    case "$cluster" in
+        standalone)
+            docker compose exec -T -u postgres pg-standalone \
+                psql -d postgres -c "SELECT pg_switch_wal();" >/dev/null
+            ;;
+        ha-demo)
+            local leader; leader=$(ha_leader)
+            docker compose exec -T -u postgres "$leader" \
+                psql -d postgres -c "SELECT pg_switch_wal();" >/dev/null
+            ;;
+    esac
+}
+
+# Expand "all" → both clusters; otherwise just echo the single target.
+each_target() {
+    if [ "$1" = "all" ]; then
+        echo standalone; echo ha-demo
+    else
+        echo "$1"
+    fi
+}
+
 # ---------- scenarios ----------
 
 case "$SCN" in
     wal_lag)
-        echo "[demo:wal_lag] Breaking archive_command on pg-standalone..."
+        validate_target "$TARGET"
+        echo "[demo:wal_lag] Breaking archive_command on: $TARGET"
         # Point archive_command at /bin/false so every WAL segment fails.
-        # archive_lag_seconds will climb past the 15m alert threshold.
-        docker compose exec -T pg-standalone \
-            psql -U postgres -c "ALTER SYSTEM SET archive_command = '/bin/false';"
-        docker compose exec -T pg-standalone \
-            psql -U postgres -c "SELECT pg_reload_conf();"
-        # Force several WAL switches so something needs to be archived now.
-        docker compose exec -T pg-standalone \
-            psql -U postgres -c "SELECT pg_switch_wal();"
+        # archive_lag_seconds will climb past the 15m alert threshold and
+        # gap_detected flips to true (last_failed_time > last_archived_time).
+        for c in $(each_target "$TARGET"); do
+            set_archive_command "$c" "/bin/false"
+            force_wal_switch "$c"
+        done
         cat <<EOF
 
   Wait ~15 minutes (or shorten WAL_LAG_THRESHOLD_SECONDS in
   manager/pct_manager/alerter/rules.py for a quicker demo) and watch:
 
     UI -> Alerts:        new 'wal_lag' alert appears
-    UI -> Cluster page:  WAL lag chart climbs
+    UI -> Cluster page:  WAL archive lag chart climbs
+
+  To recover (or run all of them at once):
+    $0 wal_recover $TARGET
+EOF
+        ;;
+
+    wal_slow_archive)
+        validate_target "$TARGET"
+        echo "[demo:wal_slow_archive] Slowing archive_command on: $TARGET"
+        # Wrap the real archive command in a sleep so segments still
+        # archive successfully (no gap_detected) but lag accumulates
+        # because every push takes 30s. Demonstrates the time-based
+        # threshold without the failure-based gap heuristic.
+        for c in $(each_target "$TARGET"); do
+            case "$c" in
+                standalone) STANZA=demo ;;
+                ha-demo)    STANZA=ha-demo ;;
+            esac
+            set_archive_command "$c" \
+                "bash -c 'sleep 30; pgbackrest --stanza=$STANZA archive-push %p'"
+            force_wal_switch "$c"
+        done
+        cat <<EOF
+
+  archive-push will now take 30s per segment. With WAL traffic from
+  demo-insert.sh the lag will outrun the archiver and climb steadily,
+  but gap_detected stays false (every push eventually succeeds).
+
+  Watch:
+    UI -> Cluster page:  WAL archive lag line ramps up, no gap badge
+    UI -> Alerts:        'wal_lag' alert opens after threshold
 
   To recover:
-    docker compose exec pg-standalone \\
-      psql -U postgres -c "ALTER SYSTEM RESET archive_command;"
-    docker compose exec pg-standalone \\
-      psql -U postgres -c "SELECT pg_reload_conf();"
+    $0 wal_recover $TARGET
+EOF
+        ;;
+
+    wal_repo_break)
+        validate_target "$TARGET"
+        echo "[demo:wal_repo_break] Removing pgBackRest repo write perms on: $TARGET"
+        # Realistic outage: repo unwritable (full disk, perms snafu, NFS
+        # blip). archive_command itself is unchanged, but pgbackrest
+        # archive-push fails with "Permission denied". Differs from
+        # wal_lag in that you'll see the actual pgbackrest error in the
+        # logs tab — operationally more useful than /bin/false.
+        for c in $(each_target "$TARGET"); do
+            case "$c" in
+                standalone) PG_SVC=pg-standalone ;;
+                # On HA both nodes write archives via the shared repo
+                # volume; chmod-ing on the leader is enough since only
+                # the primary archives.
+                ha-demo)    PG_SVC=$(ha_leader) ;;
+            esac
+            docker compose exec -T --user root "$PG_SVC" \
+                chmod 0000 /var/lib/pgbackrest/archive
+            force_wal_switch "$c"
+        done
+        cat <<EOF
+
+  Watch:
+    UI -> Cluster page:  WAL archive lag climbs, gap_detected = true
+    UI -> Logs (postgres / pgbackrest source):
+        "ERROR: [047]: unable to open ... Permission denied"
+    UI -> Alerts:        'wal_lag' alert opens after threshold
+
+  To recover:
+    $0 wal_recover $TARGET
+EOF
+        ;;
+
+    wal_recover)
+        validate_target "$TARGET"
+        echo "[demo:wal_recover] Restoring WAL archival on: $TARGET"
+        for c in $(each_target "$TARGET"); do
+            case "$c" in
+                standalone) PG_SVC=pg-standalone ;;
+                ha-demo)    PG_SVC=$(ha_leader) ;;
+            esac
+            # Always undo perms first; chmod is a no-op when nothing's
+            # broken so this is safe regardless of which scenario ran.
+            docker compose exec -T --user root "$PG_SVC" \
+                chmod 0750 /var/lib/pgbackrest/archive || true
+            restore_archive_command "$c"
+            force_wal_switch "$c"
+        done
+        cat <<EOF
+
+  archive_command + repo perms restored. The next agent tick (~30s)
+  should report lag dropping and gap_detected back to false. WAL
+  segments queued during the outage will be flushed by the recovered
+  archiver and the storage runway will jump accordingly.
 EOF
         ;;
 
@@ -150,14 +332,19 @@ EOF
 
     help|*)
         cat <<EOF
-Usage: $0 <scenario>
+Usage: $0 <scenario> [target]
 
 Scenarios:
-  wal_lag          Break archive_command on pg-standalone -> wal_lag alert
-  failover         Stop patroni-1 -> Patroni promotes patroni-2
-  backup_fail      Queue a backup with a bad stanza -> backup_failed alert
-  clock_drift     Skew an agent's clock by 10s -> clock_drift alert
-  restore          Try to queue a 'restore' job -> manager rejects (422)
+  wal_lag [target]         Break archive_command -> wal_lag alert + gap
+  wal_slow_archive [tgt]   30s sleep wrapper -> lag climbs, no gap
+  wal_repo_break [tgt]     chmod 000 the repo -> archive-push fails
+  wal_recover [tgt]        Undo every WAL break above (chmod + reset)
+  failover                 Stop patroni-1 -> Patroni promotes patroni-2
+  backup_fail              Queue a backup with a bad stanza -> alert
+  clock_drift              Skew an agent's clock by 10s -> clock_drift alert
+  restore                  Try to queue a 'restore' job -> manager rejects (422)
+
+target = standalone | ha-demo | all  (default: all, only for wal_* scenarios)
 EOF
         exit 1
         ;;
