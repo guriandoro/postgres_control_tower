@@ -355,10 +355,22 @@ curl -fsS \
   'https://pct.internal/api/v1/logs/events?cluster_id=3&severity=error,critical&since=2026-04-21T00:00:00Z&limit=50'
 ```
 
+Each row in the response carries the originating node's identity
+denormalized from `pct.agents`, so the UI's "Node" column does not
+require a per-row agent lookup:
+
+| Field        | Type             | Notes                                              |
+| ------------ | ---------------- | -------------------------------------------------- |
+| `agent_id`   | int              | FK into `pct.agents`.                              |
+| `hostname`   | string \| null   | Agent hostname; `null` if the agent row is gone.   |
+| `cluster_id` | int \| null      | Owning cluster, mirrored from `pct.agents`.        |
+| `node_role`  | enum             | `primary` \| `replica` \| `unknown` at query time. |
+
 ### Single event
 
 `GET /api/v1/logs/events/{event_id}` — returns the full
-`LogEventOut` (including `raw` and `parsed`).
+`LogEventOut` (including `raw`, `parsed`, and the `hostname` /
+`cluster_id` / `node_role` denormalized fields).
 
 ### Role transitions
 

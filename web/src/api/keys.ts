@@ -6,6 +6,7 @@ export const queryKeys = {
   me: () => ["me"] as const,
   clusters: () => ["clusters"] as const,
   cluster: (id: number) => ["clusters", id] as const,
+  agents: () => ["agents"] as const,
   logs: <T extends object>(filters: T) => ["logs", filters] as const,
   roleTransitions: <T extends object>(filters: T) =>
     ["role-transitions", filters] as const,

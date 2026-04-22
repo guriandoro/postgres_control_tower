@@ -95,16 +95,23 @@ def query_events(
     until: datetime | None = Query(default=None, description="Exclusive upper bound on ts_utc"),
     q: str | None = Query(default=None, description="Substring match on parsed->>'message'"),
     limit: int = Query(default=200, ge=1, le=_MAX_QUERY_LIMIT),
-) -> list[LogEvent]:
-    """Filtered tail of recent events. Newest-first."""
-    stmt = select(LogEvent).order_by(LogEvent.ts_utc.desc()).limit(limit)
+) -> list[LogEventOut]:
+    """Filtered tail of recent events. Newest-first.
+
+    Joins ``pct.agents`` so the response carries each event's originating
+    node identity (hostname, cluster, role). The UI surfaces this as a
+    dedicated "Node" column so multi-node clusters can be debugged
+    without ambiguity about which member emitted a line.
+    """
+    stmt = (
+        select(LogEvent, Agent.hostname, Agent.cluster_id, Agent.role)
+        .join(Agent, Agent.id == LogEvent.agent_id, isouter=True)
+        .order_by(LogEvent.ts_utc.desc())
+        .limit(limit)
+    )
 
     if cluster_id is not None:
-        stmt = stmt.where(
-            LogEvent.agent_id.in_(
-                select(Agent.id).where(Agent.cluster_id == cluster_id)
-            )
-        )
+        stmt = stmt.where(Agent.cluster_id == cluster_id)
     if agent_id is not None:
         stmt = stmt.where(LogEvent.agent_id == agent_id)
     if source is not None:
@@ -127,7 +134,30 @@ def query_events(
             )
         )
 
-    return list(db.scalars(stmt).all())
+    return [
+        _to_log_event_out(event, hostname, cluster_id_, role)
+        for event, hostname, cluster_id_, role in db.execute(stmt).all()
+    ]
+
+
+def _to_log_event_out(
+    event: LogEvent,
+    hostname: str | None,
+    cluster_id: int | None,
+    role: str | None,
+) -> LogEventOut:
+    return LogEventOut(
+        id=event.id,
+        ts_utc=event.ts_utc,
+        agent_id=event.agent_id,
+        hostname=hostname,
+        cluster_id=cluster_id,
+        node_role=role or "unknown",  # type: ignore[arg-type]
+        source=event.source,  # type: ignore[arg-type]
+        severity=event.severity,  # type: ignore[arg-type]
+        raw=event.raw,
+        parsed=event.parsed,
+    )
 
 
 @router.get("/role_transitions", response_model=list[RoleTransitionOut])
@@ -166,8 +196,13 @@ def get_event(
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
-) -> LogEvent:
-    event = db.scalar(select(LogEvent).where(LogEvent.id == event_id))
-    if event is None:
+) -> LogEventOut:
+    row = db.execute(
+        select(LogEvent, Agent.hostname, Agent.cluster_id, Agent.role)
+        .join(Agent, Agent.id == LogEvent.agent_id, isouter=True)
+        .where(LogEvent.id == event_id)
+    ).first()
+    if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Event not found")
-    return event
+    event, hostname, cluster_id, role = row
+    return _to_log_event_out(event, hostname, cluster_id, role)

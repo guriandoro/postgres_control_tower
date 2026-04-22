@@ -122,6 +122,11 @@ export interface LogEvent {
   id: number;
   ts_utc: string;
   agent_id: number;
+  /** Denormalized agent identity. Null if the originating agent row is gone. */
+  hostname: string | null;
+  cluster_id: number | null;
+  /** Last-known role of the agent at query time, NOT at log emission time. */
+  node_role: AgentRole;
   source: LogSource;
   severity: LogSeverity;
   raw: string;

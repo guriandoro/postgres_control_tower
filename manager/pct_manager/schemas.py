@@ -274,6 +274,12 @@ class LogEventOut(BaseModel):
     id: int
     ts_utc: datetime
     agent_id: int
+    # Denormalized agent identity so the UI can render a "Node" column
+    # without a per-row /agents lookup. Populated via a join in the
+    # /logs/events route; nullable for safety if the agent row is gone.
+    hostname: str | None = None
+    cluster_id: int | None = None
+    node_role: AgentRole = "unknown"
     source: LogSource
     severity: LogSeverity
     raw: str

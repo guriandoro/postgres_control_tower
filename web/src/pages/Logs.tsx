@@ -8,10 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Spinner } from "@/components/ui/Spinner";
+import { useAgents } from "@/hooks/queries/useAgents";
 import { useClusters } from "@/hooks/queries/useClusters";
 import { useLogs, type LogFilters } from "@/hooks/queries/useLogs";
 import { evaluateRules } from "@/rca/rules";
-import type { LogEvent, LogSeverity, LogSource } from "@/api/types";
+import type { AgentRole, LogEvent, LogSeverity, LogSource } from "@/api/types";
 import { formatUtc } from "@/lib/format";
 import { queryKeys } from "@/api/keys";
 
@@ -25,6 +26,7 @@ export function LogsPage() {
   const filters: LogFilters = useMemo(
     () => ({
       cluster_id: numberOrUndef(params.get("cluster_id")),
+      agent_id: numberOrUndef(params.get("agent_id")),
       source: (params.get("source") as LogSource | null) ?? undefined,
       severity: (params.get("severity") as LogSeverity | null) ?? undefined,
       q: params.get("q") ?? undefined,
@@ -35,8 +37,17 @@ export function LogsPage() {
   const [qDraft, setQDraft] = useState(filters.q ?? "");
 
   const { data: clusters } = useClusters();
+  const { data: agents } = useAgents();
   const logsQuery = useLogs(filters);
   const events = logsQuery.data ?? [];
+
+  // When a cluster is selected, narrow the Node dropdown to its members
+  // so a 3-node Patroni demo doesn't show 12 unrelated hostnames.
+  const visibleAgents = useMemo(() => {
+    if (!agents) return [];
+    if (filters.cluster_id == null) return agents;
+    return agents.filter((a) => a.cluster_id === filters.cluster_id);
+  }, [agents, filters.cluster_id]);
 
   const hints = useMemo(() => evaluateRules(events), [events]);
 
@@ -69,16 +80,33 @@ export function LogsPage() {
       </header>
 
       <Card>
-        <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-5">
+        <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-6">
           <Select
             value={filters.cluster_id != null ? String(filters.cluster_id) : ""}
-            onChange={(e) => patch({ cluster_id: e.target.value })}
+            onChange={(e) =>
+              // Clear the node filter when switching clusters so the user
+              // doesn't end up with an empty result set from a stale agent_id.
+              patch({ cluster_id: e.target.value, agent_id: "" })
+            }
             aria-label="Cluster"
           >
             <option value="">All clusters</option>
             {clusters?.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
+              </option>
+            ))}
+          </Select>
+          <Select
+            value={filters.agent_id != null ? String(filters.agent_id) : ""}
+            onChange={(e) => patch({ agent_id: e.target.value })}
+            aria-label="Node"
+          >
+            <option value="">All nodes</option>
+            {visibleAgents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.hostname}
+                {a.role !== "unknown" ? ` (${a.role})` : ""}
               </option>
             ))}
           </Select>
@@ -192,9 +220,9 @@ function LogTable({ events }: { events: LogEvent[] }) {
         <thead className="sticky top-0 z-10 bg-card">
           <tr className="border-b border-border text-left text-muted-foreground">
             <th className="px-3 py-2 font-medium">Time (UTC)</th>
+            <th className="px-3 py-2 font-medium">Node</th>
             <th className="px-3 py-2 font-medium">Source</th>
             <th className="px-3 py-2 font-medium">Severity</th>
-            <th className="px-3 py-2 font-medium">Agent</th>
             <th className="px-3 py-2 font-medium">Message</th>
           </tr>
         </thead>
@@ -207,14 +235,14 @@ function LogTable({ events }: { events: LogEvent[] }) {
               <td className="whitespace-nowrap px-3 py-1.5 font-mono text-muted-foreground">
                 {formatUtc(e.ts_utc)}
               </td>
+              <td className="whitespace-nowrap px-3 py-1.5">
+                <NodeCell event={e} />
+              </td>
               <td className="px-3 py-1.5">
                 <Badge tone="muted">{e.source}</Badge>
               </td>
               <td className="px-3 py-1.5">
                 <Badge tone={severityTone(e.severity)}>{e.severity}</Badge>
-              </td>
-              <td className="whitespace-nowrap px-3 py-1.5 font-mono text-muted-foreground">
-                #{e.agent_id}
               </td>
               <td className="px-3 py-1.5">
                 <div className="font-mono leading-snug">
@@ -227,6 +255,29 @@ function LogTable({ events }: { events: LogEvent[] }) {
       </table>
     </div>
   );
+}
+
+function NodeCell({ event }: { event: LogEvent }) {
+  const label = event.hostname ?? `agent #${event.agent_id}`;
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="font-mono text-foreground">{label}</span>
+      {event.node_role !== "unknown" && (
+        <Badge tone={roleTone(event.node_role)}>{event.node_role}</Badge>
+      )}
+    </div>
+  );
+}
+
+function roleTone(role: AgentRole): "muted" | "neutral" | "primary" {
+  switch (role) {
+    case "primary":
+      return "primary";
+    case "replica":
+      return "neutral";
+    default:
+      return "muted";
+  }
 }
 
 function severityTone(s: LogSeverity): "muted" | "neutral" | "warning" | "destructive" {
