@@ -715,8 +715,10 @@ function SubmitJobDialog({
       } else if (isPtStalk) {
         const runtime = Number(ptStalkRuntime);
         const iterations = Number(ptStalkIterations);
-        if (!Number.isFinite(runtime) || runtime < 1 || runtime > 3600) {
-          setError("Run time must be between 1 and 3600 seconds.");
+        if (!Number.isFinite(runtime) || runtime < 30 || runtime > 3600) {
+          setError(
+            "Run time must be between 30 and 3600 seconds (pt-stalk hard minimum is 30s).",
+          );
           return;
         }
         if (!Number.isFinite(iterations) || iterations < 1 || iterations > 60) {
@@ -833,7 +835,7 @@ function SubmitJobDialog({
               <Field label="Run time (seconds)">
                 <Input
                   type="number"
-                  min={1}
+                  min={30}
                   max={3600}
                   value={ptStalkRuntime}
                   onChange={(e) => setPtStalkRuntime(e.target.value)}

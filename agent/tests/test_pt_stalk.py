@@ -66,7 +66,7 @@ def test_parse_pg_dsn_empty() -> None:
 def test_build_pt_stalk_cmd_basics(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     cmd, env, dest_dir, pid_file, log_file = build_pt_stalk_cmd(
-        settings, params={"run_time_seconds": 10, "iterations": 2}, now=1_700_000_000
+        settings, params={"run_time_seconds": 45, "iterations": 2}, now=1_700_000_000
     )
 
     # Mode flags are mandatory.
@@ -79,7 +79,7 @@ def test_build_pt_stalk_cmd_basics(tmp_path: Path) -> None:
         return cmd[idx + 1]
 
     assert arg_value("--iterations") == "2"
-    assert arg_value("--run-time") == "10"
+    assert arg_value("--run-time") == "45"
     assert arg_value("--pg-host") == "db.example"
     assert arg_value("--pg-user") == "monitor"
     assert arg_value("--pg-database") == "app"
@@ -147,8 +147,11 @@ def test_build_pt_stalk_cmd_falls_back_to_defaults_for_missing_dsn(
 
 def test_build_pt_stalk_cmd_rejects_oob_runtime(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
+    # pt-stalk's --pgsql mode hard-rejects anything below 30s.
     with pytest.raises(PtStalkConfigError):
         build_pt_stalk_cmd(settings, params={"run_time_seconds": 0}, now=1)
+    with pytest.raises(PtStalkConfigError):
+        build_pt_stalk_cmd(settings, params={"run_time_seconds": 29}, now=1)
     with pytest.raises(PtStalkConfigError):
         build_pt_stalk_cmd(settings, params={"run_time_seconds": 99999}, now=1)
 

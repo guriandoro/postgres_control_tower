@@ -31,9 +31,14 @@ logger = logging.getLogger("pct_agent.pt_stalk")
 
 _DEFAULT_RUN_TIME_SECONDS = 30
 _DEFAULT_ITERATIONS = 1
-# Both caps mirror what's reasonable for a single ad-hoc snapshot. The
-# manager API doesn't enforce them; that's intentional — defense in
-# depth lives here, in the agent that actually executes the command.
+# pt-stalk's --pgsql mode hard-rejects anything below 30s because
+# pg_gather contains internal sleeps that can take >20s. Mirror that
+# here so we fail fast with a clear PtStalkConfigError instead of
+# spawning a subprocess that exits 1 on its own arg validation.
+_MIN_RUN_TIME_SECONDS = 30
+# Upper caps mirror what's reasonable for a single ad-hoc snapshot.
+# The manager API doesn't enforce them; that's intentional — defense
+# in depth lives here, in the agent that actually executes pt-stalk.
 _MAX_RUN_TIME_SECONDS = 3600
 _MAX_ITERATIONS = 60
 
@@ -87,9 +92,10 @@ def build_pt_stalk_cmd(
     iterations = _coerce_int(
         params.get("iterations"), _DEFAULT_ITERATIONS, "iterations"
     )
-    if not 1 <= run_time <= _MAX_RUN_TIME_SECONDS:
+    if not _MIN_RUN_TIME_SECONDS <= run_time <= _MAX_RUN_TIME_SECONDS:
         raise PtStalkConfigError(
-            f"run_time_seconds must be 1..{_MAX_RUN_TIME_SECONDS}; got {run_time}"
+            f"run_time_seconds must be "
+            f"{_MIN_RUN_TIME_SECONDS}..{_MAX_RUN_TIME_SECONDS}; got {run_time}"
         )
     if not 1 <= iterations <= _MAX_ITERATIONS:
         raise PtStalkConfigError(
