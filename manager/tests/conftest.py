@@ -64,7 +64,8 @@ def db_session(engine) -> Iterator[Session]:
         s.execute(
             text(
                 "TRUNCATE TABLE pct.job_artifacts, pct.jobs, "
-                "pct.agents, pct.clusters RESTART IDENTITY CASCADE"
+                "pct.agents, pct.clusters, pct.users "
+                "RESTART IDENTITY CASCADE"
             )
         )
         s.commit()
