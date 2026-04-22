@@ -87,6 +87,11 @@ def test_build_pt_stalk_cmd_basics(tmp_path: Path) -> None:
     assert arg_value("--pid") == str(pid_file)
     assert arg_value("--log") == str(log_file)
 
+    # Disabling pg-gzip is required so pt-stalk's empty-file cleanup
+    # doesn't unlink the binary gather output (see pt_stalk.py for the
+    # full rationale).
+    assert arg_value("--pg-gzip") == "no"
+
     # Password came from the DSN.
     assert env == {"PGPASSWORD": "s3cr3t"}
     assert dest_dir.parent == tmp_path / "pt-stalk"
