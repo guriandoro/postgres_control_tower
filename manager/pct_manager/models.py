@@ -245,6 +245,54 @@ class Job(Base):
     stdout_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class BackupSchedule(Base):
+    """Recurring backup definition fired by the manager scheduler.
+
+    A schedule pairs a cluster with a cron expression (UTC, 5-field
+    POSIX cron) and a backup ``kind``. The manager's ``schedules`` tick
+    job inspects rows where ``enabled = true`` and ``next_run_at <= now()``,
+    inserts a fresh ``pct.jobs`` row, and recomputes ``next_run_at`` from
+    the cron expression.
+
+    Limited by design to ``backup_full | backup_diff | backup_incr``.
+    ``check`` and ``stanza_create`` stay one-off — they don't need a
+    calendar (see ``docs/safety-and-rbac.md``).
+    """
+
+    __tablename__ = "backup_schedules"
+    __table_args__ = (
+        Index("ix_backup_schedules_cluster", "cluster_id"),
+        Index("ix_backup_schedules_due", "enabled", "next_run_at"),
+        {"schema": "pct"},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cluster_id: Mapped[int] = mapped_column(
+        ForeignKey("pct.clusters.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    # Standard 5-field cron, evaluated in UTC.
+    cron_expression: Mapped[str] = mapped_column(String(128), nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("pct.users.id", ondelete="SET NULL"), nullable=True
+    )
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # ON DELETE SET NULL so purging old jobs doesn't drop the schedule row.
+    last_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pct.jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class Alert(Base):
     """An open or resolved alert raised by the rule engine.
 

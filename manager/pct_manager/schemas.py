@@ -344,6 +344,68 @@ class JobOut(BaseModel):
     stdout_tail: str | None
 
 
+# Schedules only fire backups. ``check`` and ``stanza_create`` stay one-off
+# (they don't need a calendar — see docs/safety-and-rbac.md). The agent
+# runner allowlist is a strict superset, so any kind we add here is
+# always agent-executable.
+BackupScheduleKind = Literal[
+    "backup_full",
+    "backup_diff",
+    "backup_incr",
+]
+BACKUP_SCHEDULE_KINDS: tuple[BackupScheduleKind, ...] = (
+    "backup_full",
+    "backup_diff",
+    "backup_incr",
+)
+
+
+class BackupScheduleCreateRequest(BaseModel):
+    """Operator submits a recurring backup from the UI.
+
+    ``cron_expression`` is a 5-field POSIX cron (min hour dom mon dow)
+    evaluated in UTC. The route validates it via APScheduler's
+    ``CronTrigger.from_crontab`` before persisting.
+    """
+
+    cluster_id: int
+    kind: BackupScheduleKind
+    cron_expression: str = Field(min_length=1, max_length=128)
+    params: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class BackupScheduleUpdateRequest(BaseModel):
+    """All fields optional — caller sends only what changed.
+
+    Edit semantics: changing ``cron_expression`` recomputes
+    ``next_run_at`` from "now". Toggling ``enabled`` from false → true
+    also recomputes; false → true on a stale ``next_run_at`` would
+    otherwise stampede the next tick.
+    """
+
+    cron_expression: str | None = Field(default=None, min_length=1, max_length=128)
+    params: dict[str, Any] | None = None
+    enabled: bool | None = None
+    kind: BackupScheduleKind | None = None
+
+
+class BackupScheduleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    cluster_id: int
+    kind: BackupScheduleKind
+    cron_expression: str
+    params: dict[str, Any]
+    enabled: bool
+    created_at: datetime
+    created_by: int | None
+    last_run_at: datetime | None
+    last_job_id: int | None
+    next_run_at: datetime | None
+
+
 class JobClaim(BaseModel):
     """Returned by the agent long-poll endpoint when work is available."""
 

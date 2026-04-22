@@ -217,6 +217,47 @@ export interface JobCreateRequest {
   params?: Record<string, unknown>;
 }
 
+// ---------- Safe Ops: backup schedules ----------
+
+/** Schedules only fire backups; ``check`` and ``stanza_create`` stay one-off. */
+export type BackupScheduleKind = "backup_full" | "backup_diff" | "backup_incr";
+
+export const BACKUP_SCHEDULE_KINDS: readonly BackupScheduleKind[] = [
+  "backup_full",
+  "backup_diff",
+  "backup_incr",
+] as const;
+
+export interface BackupSchedule {
+  id: number;
+  cluster_id: number;
+  kind: BackupScheduleKind;
+  /** 5-field POSIX cron evaluated in UTC by the manager. */
+  cron_expression: string;
+  params: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  created_by: number | null;
+  last_run_at: string | null;
+  last_job_id: number | null;
+  next_run_at: string | null;
+}
+
+export interface BackupScheduleCreateRequest {
+  cluster_id: number;
+  kind: BackupScheduleKind;
+  cron_expression: string;
+  params?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export interface BackupScheduleUpdateRequest {
+  cron_expression?: string;
+  params?: Record<string, unknown>;
+  enabled?: boolean;
+  kind?: BackupScheduleKind;
+}
+
 /** Subset of the pgBackRest JSON we actually render — see PLAN §6 retention timeline. */
 export interface PgbrStanza {
   name: string;

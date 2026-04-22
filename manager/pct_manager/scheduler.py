@@ -18,6 +18,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .alerter import evaluate_rules, refresh_storage_forecasts
 from .config import settings
 from .partitions import ensure_log_partitions, prune_old_log_partitions
+from .schedules import evaluate_backup_schedules
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,19 @@ def build_scheduler() -> AsyncIOScheduler:
         coalesce=True,
         max_instances=1,
     )
+
+    # Backup schedules — fire any pct.backup_schedules row whose
+    # next_run_at is past. Cron resolution is per-minute so polling at
+    # 60s is precise enough; coalesce so a paused manager doesn't
+    # double-fire on resume.
+    scheduler.add_job(
+        _safe(evaluate_backup_schedules),
+        IntervalTrigger(seconds=settings.schedule_tick_interval),
+        id="evaluate_backup_schedules",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
     return scheduler
 
 
@@ -67,7 +81,13 @@ def run_startup_jobs() -> None:
     in, so a fresh manager doesn't have to wait until midnight UTC for the
     first partition to be created (and so the Alerts page isn't empty for
     a whole minute after startup)."""
-    for fn in (ensure_log_partitions, _prune_logs, evaluate_rules, refresh_storage_forecasts):
+    for fn in (
+        ensure_log_partitions,
+        _prune_logs,
+        evaluate_rules,
+        refresh_storage_forecasts,
+        evaluate_backup_schedules,
+    ):
         try:
             fn()
         except Exception:  # noqa: BLE001

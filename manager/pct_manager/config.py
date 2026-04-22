@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # Re-notify the same OPEN alert every N seconds at most. 6h by
     # default; ack the alert in the UI to silence sooner.
     alert_renotify_seconds: int = 6 * 3600
+    # Backup schedules tick — how often to scan ``pct.backup_schedules``
+    # for due rows. 60s matches the cron resolution; lowering it doesn't
+    # buy precision because cron itself is minute-grained.
+    schedule_tick_interval: int = 60
     # Storage runway forecast cadence and lookback window.
     forecast_interval_seconds: int = 300
     forecast_window_days: int = 7

@@ -13,6 +13,7 @@ from .routes import auth as auth_routes
 from .routes import clusters as clusters_routes
 from .routes import jobs as jobs_routes
 from .routes import logs as logs_routes
+from .routes import schedules as schedules_routes
 from .scheduler import build_scheduler, run_startup_jobs
 from .web import mount_spa
 
@@ -63,6 +64,9 @@ app.include_router(auth_routes.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(agents_routes.router, prefix="/api/v1/agents", tags=["agents"])
 app.include_router(clusters_routes.router, prefix="/api/v1/clusters", tags=["clusters"])
 app.include_router(jobs_routes.router, prefix="/api/v1/jobs", tags=["jobs"])
+app.include_router(
+    schedules_routes.router, prefix="/api/v1/schedules", tags=["schedules"]
+)
 app.include_router(logs_routes.router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(alerts_routes.router, prefix="/api/v1/alerts", tags=["alerts"])
 

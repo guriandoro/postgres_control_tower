@@ -39,6 +39,10 @@ All routes are prefixed with `/api/v1`.
 | Logs read   | `/logs/role_transitions`                           | GET    | UI JWT (viewer)     |
 | Jobs read   | `/jobs`, `/jobs/{job_id}`                          | GET    | UI JWT (viewer)     |
 | Jobs write  | `/jobs`                                            | POST   | UI JWT (admin)      |
+| Schedules   | `/schedules`                                       | GET    | UI JWT (viewer)     |
+| Schedules   | `/schedules`                                       | POST   | UI JWT (admin)      |
+| Schedules   | `/schedules/{id}`                                  | PATCH  | UI JWT (admin)      |
+| Schedules   | `/schedules/{id}`                                  | DELETE | UI JWT (admin)      |
 | Alerts      | `/alerts`, `/alerts/summary`                       | GET    | UI JWT (viewer)     |
 | Alerts      | `/alerts/{alert_id}/ack`                           | POST   | UI JWT (admin)      |
 | Agent in    | `/agents/register`                                 | POST   | enrollment token    |
@@ -434,6 +438,86 @@ Response: `200 OK` with the updated `JobOut`.
 `409 Conflict` means the manager doesn't think the job is still
 `running` (e.g. it was reset out-of-band). The runner logs and moves
 on; nothing to retry.
+
+## Backup schedules
+
+Recurring backups expressed as a cron expression (UTC) attached to a
+cluster. The manager's APScheduler tick walks enabled rows once a
+minute and inserts a `pct.jobs` row when `next_run_at <= now()`. A
+fired schedule is indistinguishable from an operator-submitted job —
+same routing rules, same agent runner, same allowlist (defense in
+depth: the routes here only accept `backup_full | backup_diff |
+backup_incr`; `check` and `stanza_create` stay one-off).
+
+### List
+
+`GET /api/v1/schedules?cluster_id=3`
+
+```json
+[
+  {
+    "id": 1,
+    "cluster_id": 3,
+    "kind": "backup_full",
+    "cron_expression": "0 2 * * 0",
+    "params": { "stanza": "main" },
+    "enabled": true,
+    "created_at": "2026-04-22T10:00:00+00:00",
+    "created_by": 1,
+    "last_run_at": "2026-04-19T02:00:01+00:00",
+    "last_job_id": 142,
+    "next_run_at": "2026-04-26T02:00:00+00:00"
+  }
+]
+```
+
+### Create (admin)
+
+`POST /api/v1/schedules`
+
+```json
+{
+  "cluster_id": 3,
+  "kind": "backup_incr",
+  "cron_expression": "0 */6 * * *",
+  "params": { "stanza": "main" },
+  "enabled": true
+}
+```
+
+`cron_expression` is a **5-field POSIX cron** (`min hour dom mon dow`)
+evaluated in UTC. The route validates it via APScheduler's
+`CronTrigger.from_crontab` before persisting; a bad expression yields
+`400` with the parser error in `detail`.
+
+Response (`201 Created`): a full `BackupScheduleOut` with
+`next_run_at` populated.
+
+### Toggle / edit (admin)
+
+`PATCH /api/v1/schedules/{id}`
+
+All fields optional — send only what changes.
+
+```json
+{ "enabled": false }
+```
+
+```json
+{ "cron_expression": "0 3 * * *", "params": { "stanza": "main" } }
+```
+
+Re-enabling a schedule (or changing its cron) recomputes
+`next_run_at` from "now" so a long-paused schedule cannot fire its
+backlog all at once.
+
+### Delete (admin)
+
+`DELETE /api/v1/schedules/{id}` — `204 No Content`.
+
+Already-queued jobs that the schedule produced are **not** removed;
+the FK on `last_job_id` is `ON DELETE SET NULL` on the schedule side,
+so `pct.jobs` rows always survive their parent schedule.
 
 ## Alerts
 

@@ -73,7 +73,7 @@ under any circumstances in v1.
 ## Data model anchors
 
 - Schema `pct`: `clusters`, `agents`, `pgbackrest_info`, `wal_health`, `jobs`,
-  `alerts`, `users`.
+  `backup_schedules`, `alerts`, `users`.
 - Schema `logs`: `logs.events` (partitioned monthly, btree on
   `(agent_id, ts_utc)`, GIN on `parsed`), `logs.role_transitions`.
 - `users.role` is one of `viewer` | `admin` only.

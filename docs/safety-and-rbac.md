@@ -20,6 +20,7 @@ incident, this is the page that says "we already thought about it".
 | `pgbackrest backup --type=incr` | Yes        | `POST /api/v1/jobs`             | ✅            | `kind: "backup_incr"`. Admin-gated.                                    |
 | `pgbackrest check`              | Yes        | `POST /api/v1/jobs`             | ✅            | `kind: "check"`. Admin-gated. Read-only against the repo.              |
 | `pgbackrest stanza-create`      | Yes        | `POST /api/v1/jobs`             | ✅            | `kind: "stanza_create"`. Admin-gated. Idempotent on existing stanzas.  |
+| Recurring backup schedule       | Yes        | `POST /api/v1/schedules`        | ✅            | Cron-driven; only the three `backup_*` kinds. Admin-gated.             |
 | `pgbackrest restore`            | **No**     | n/a                             | ❌ blocked    | Type literal rejects the value; agent runner allowlist also rejects.   |
 | `pgbackrest stanza-delete`      | **No**     | n/a                             | ❌ blocked    | Same — both layers refuse.                                             |
 | Config push (`pgbackrest.conf`) | **No**     | n/a                             | ❌ blocked    | No code path exists. Documented as v2 in [`hardening.md`](hardening.md).|
@@ -59,6 +60,8 @@ Cannot:
 Everything `viewer` can do, plus:
 
 - `POST /api/v1/jobs` — submit a backup / check / stanza-create.
+- `POST /api/v1/schedules`, `PATCH/DELETE /api/v1/schedules/{id}` —
+  manage recurring backup schedules. Listing them is `viewer`-only.
 - `POST /api/v1/alerts/{id}/ack` — silence an open alert.
 
 Admin-gating is implemented by the
@@ -156,11 +159,34 @@ layer still refuses. Specifically:
   `pct.jobs`, the agent runner sees `kind not in ALLOWED_KINDS`
   and reports `exit_code=126` without ever touching pgBackRest.
 
+## Recurring backup schedules
+
+Backup schedules (`pct.backup_schedules`) are admin-gated cron
+expressions, evaluated in UTC. The manager's APScheduler tick fires
+due rows by inserting a `pct.jobs` entry exactly like the UI does, so
+the same allowlist and routing apply. Two extra invariants:
+
+- The schedule allowlist is **narrower** than the job allowlist —
+  only `backup_full | backup_diff | backup_incr` (see
+  `BACKUP_SCHEDULE_KINDS` in `manager/pct_manager/schemas.py`).
+  `check` and `stanza_create` stay one-off because there's no good
+  reason to repeat them on a calendar.
+- Disabling and re-enabling a schedule recomputes `next_run_at` from
+  "now" so a paused schedule cannot fire its missed runs in a burst
+  the moment it's re-enabled.
+
+`requested_by` on scheduler-issued jobs is `null`; the audit trail
+points back via `pct.backup_schedules.last_job_id` and
+`schedule.created_by`.
+
 ## Auditing
 
 v1 has no audit log table. It has:
 
-- `pct.jobs.requested_by` — admin user ID for every job.
+- `pct.jobs.requested_by` — admin user ID for every operator-submitted
+  job. `null` for jobs created by the schedule tick (look at
+  `pct.backup_schedules.created_by` instead).
+- `pct.backup_schedules.created_by` — admin user ID per schedule.
 - `pct.alerts.acknowledged_by` — admin user ID for every ack.
 - The manager logs every `require_admin`-gated request via
   uvicorn access logs.

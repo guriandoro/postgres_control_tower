@@ -14,7 +14,7 @@ Unify the pgBackRest Nexus and Diagnostic Hub specs into one product, **Postgres
 - [x] **P3 — pgBackRest data collection + WAL health:** info JSON parser, `pg_stat_archiver` probe, manager `/clusters` endpoints
 - [x] **P4 — Log ingestion** for PG, pgBackRest, Patroni, etcd, OS/journald: tailers, UTC normalizer, shipper with disk spool, monthly partitioning, `role_transitions` derivation
 - [x] **P5 — UI read paths:** Vite + Tailwind + shadcn/ui dark, Dashboard, Cluster detail with Recharts retention timeline, Logs Surgeon view with UTC sync + RCA hints
-- [x] **P6 — Safe Ops:** `jobs` table, agent job runner, Jobs UI for Backup (Full/Diff/Incr), Check, Stanza-create with confirmation; restore/delete blocked in code
+- [x] **P6 — Safe Ops:** `jobs` table, agent job runner, Jobs UI for Backup (Full/Diff/Incr), Check, Stanza-create with confirmation; restore/delete blocked in code; recurring `backup_schedules` (cron, UTC) fired by APScheduler
 - [x] **P7 — Alerting + clock drift:** Slack + SMTP notifiers, rule engine (backup fail, WAL lag > 60s warn / > 5m crit, clock drift > 2s, role flapping), storage runway forecast
 - [x] **P8 — Documentation:** populate `docs/` (architecture, deployment, agent-setup, log-sources, safety-and-rbac, api, hardening, troubleshooting, conflicts-resolved)
 - [x] **P9 — Docker Compose demo:** Dockerfiles for manager+agent, compose with Postgres + standalone PG + 2-node Patroni + etcd + agents, `bootstrap.sh` / `teardown.sh` / `reset.sh` / `demo-failures.sh`
@@ -106,6 +106,7 @@ Schema `pct` (metadata):
 - `pgbackrest_info(agent_id, captured_at, payload jsonb)` — last N snapshots
 - `wal_health(agent_id, captured_at, last_archived_wal, archive_lag_seconds, gap_detected bool)`
 - `jobs(id, agent_id, kind ['backup_full'|'backup_diff'|'backup_incr'|'check'|'stanza_create'], params jsonb, status, requested_by, created_at, started_at, finished_at, exit_code, stdout_tail)`
+- `backup_schedules(id, cluster_id, kind ['backup_full'|'backup_diff'|'backup_incr'], cron_expression, params jsonb, enabled, created_at, created_by, last_run_at, last_job_id, next_run_at)` — fired by an APScheduler tick that inserts `jobs` rows when due. Schedules only carry the three backup kinds; `check`/`stanza_create` stay one-off.
 - `alerts(id, kind, severity, cluster_id, opened_at, resolved_at, payload jsonb)`
 - `users(id, email, password_hash, role)` — `viewer`/`admin`, used only for UI
 
