@@ -17,7 +17,7 @@ collectors are in [`agent/pct_agent/collectors/`](../agent/pct_agent/collectors/
 | `pgbackrest` | `collectors/pgbr_logs.py`     | `PCT_AGENT_PGBACKREST_LOG_PATHS`  | rotation-aware tailer | backup progress, archive-push, fail history                 |
 | `patroni`    | `collectors/patroni_logs.py`  | `PCT_AGENT_PATRONI_LOG_PATHS`     | rotation-aware tailer | leader-election lines → `logs.role_transitions`             |
 | `etcd`       | `collectors/etcd_logs.py`     | `PCT_AGENT_ETCD_LOG_PATHS`        | rotation-aware tailer | consensus health, leader changes (JSON or text)             |
-| `os`         | `collectors/os_logs.py`       | `PCT_AGENT_OS_LOG_PATHS`          | `journalctl -fo json` | OOM Killer, I/O errors, severity bumps                      |
+| `os`         | `collectors/os_logs.py` + `collectors/host_metrics.py` | `PCT_AGENT_OS_LOG_PATHS` (+ `PCT_AGENT_HOST_METRICS_INTERVAL`) | `journalctl -fo json` (with `/proc` sampler fallback) | OOM Killer, I/O errors, host load + memory samples |
 
 A source with an empty path knob is **disabled**.
 Each tailer is rotation-aware (size-shrink + inode-change detection)
@@ -164,9 +164,21 @@ These also flow into `logs.role_transitions` with `source='etcd'`.
 
 ## 5. OS / journald
 
-This is the only collector that does **not** read files by default.
-It runs `journalctl -fo json --no-pager` and parses each line as a
-journald JSON object (see `parse_os_journald_json`).
+The OS source has **two** producers, both labelled `source='os'`:
+
+1. `collectors/os_logs.py` — primary path. Runs
+   `journalctl -fo json --no-pager` on hosts that have systemd, and
+   parses each line as a journald JSON object (see
+   `parse_os_journald_json`). This is the only producer that catches
+   real OOM-killer events, kernel I/O errors, and arbitrary syslog.
+2. `collectors/host_metrics.py` — always-on portable fallback. Samples
+   `/proc/loadavg`, `/proc/meminfo` and `/proc/uptime` every
+   `PCT_AGENT_HOST_METRICS_INTERVAL` seconds (default `60`, set `0` to
+   disable) and ships a normalized `host_sample` record. This was
+   added because our minimal agent containers (`python:3.12-slim`)
+   ship without `journalctl`, which left the UI's OS filter empty in
+   the demo. On bare-metal / VM installs the loop runs in parallel
+   with `journalctl` so you also get a steady "host alive" heartbeat.
 
 **Severity bumps**
 
@@ -192,9 +204,25 @@ sudo systemctl restart pct-agent
 ```
 
 If `journalctl` is missing entirely (minimal container), the
-collector falls back to tailing any paths in
-`PCT_AGENT_OS_LOG_PATHS`. With neither, the collector logs once and
-then idles.
+file-tailing collector falls back to tailing any paths in
+`PCT_AGENT_OS_LOG_PATHS`. With neither, that collector logs once and
+then idles — but the `host_metrics` loop keeps producing
+`source='os'` samples, so the OS filter in the UI is never empty.
+
+**Host metrics severity thresholds** (see
+`collectors/host_metrics.py`):
+
+| Condition                       | Severity   |
+| ------------------------------- | ---------- |
+| `mem_used_pct >= 95`            | `critical` |
+| `mem_used_pct >= 85`            | `warning`  |
+| `loadavg_1m / cpu_count >= 3.0` | `critical` |
+| `loadavg_1m / cpu_count >= 1.5` | `warning`  |
+| Otherwise                       | `info`     |
+
+Every sample is also stored in `parsed.*` (`loadavg_1m`, `mem_used_pct`,
+`uptime_seconds`, …) so the Logs UI / SQL queries can filter on the
+structured fields directly.
 
 ## How role transitions become a Gantt
 

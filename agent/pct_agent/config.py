@@ -71,6 +71,11 @@ class AgentSettings(BaseSettings):
     etcd_log_paths: str = ""
     # OS source uses journalctl by default; this is for explicit fallback files.
     os_log_paths: str = ""
+    # Periodic /proc-based OS sampler (collectors/host_metrics.py). Always
+    # ships under source='os'. Set to 0 to disable. Defaults to one sample
+    # per minute so containerized installs (no journalctl) still populate
+    # the OS source; production hosts get this *in addition* to journald.
+    host_metrics_interval: int = 60
 
     # Shipper tuning (see PLAN §6).
     shipper_batch_size: int = 200

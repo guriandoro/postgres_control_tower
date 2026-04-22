@@ -104,6 +104,7 @@ flowchart LR
 | `collectors/wal.py`                        | `pg_stat_archiver` + `pg_last_wal_replay_lsn()`; archive lag + gap detection.    |
 | `collectors/{pg,pgbr,patroni,etcd}_logs.py`| Rotation-aware tailers, one per source, all funnel into the shipper.            |
 | `collectors/os_logs.py`                    | `journalctl -fo json`; OOM Killer + I/O error severity bumps.                   |
+| `collectors/host_metrics.py`               | Periodic `/proc` sampler shipped under `source='os'`. Portable fallback for containers without journalctl. |
 | `tailer.py`                                | The actual rotation-aware byte tailer used by the file collectors.              |
 | `parsers.py`                               | Per-source line → `LogRecord`; severity normalization; role-transition detection.|
 | `log_record.py`                            | The `LogRecord` dataclass + UTC normalizer.                                     |

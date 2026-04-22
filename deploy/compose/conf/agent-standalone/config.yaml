@@ -24,6 +24,11 @@ pgbackrest_log_paths: /var/log/pgbackrest/demo-backup.log,/var/log/pgbackrest/de
 patroni_log_paths: ""
 etcd_log_paths: ""
 
+# Periodic /proc-based OS samples — see docs/log-sources.md.
+# The standalone agent container has no journalctl either, so this is
+# the way the OS source gets populated for the standalone cluster.
+host_metrics_interval: 60
+
 # Shipper tuning.
 shipper_batch_size: 200
 shipper_flush_interval: 5.0

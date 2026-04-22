@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from . import __version__
+from .collectors.host_metrics import host_metrics_loop
 from .collectors.log_files import tail_many
 from .collectors.os_logs import os_loop
 from .collectors.patroni import patroni_loop
@@ -180,6 +181,17 @@ def _start_log_collectors(
         asyncio.create_task(
             os_loop(shipper, host_tz, extra_paths=_split_paths(settings.os_log_paths)),
             name="pct-agent-os",
+        )
+    )
+    # Always-on /proc sampler that ships under source='os'. Critical for
+    # containerized installs where journalctl + /var/log/messages are
+    # both absent — without this the OS source would be empty in the UI.
+    tasks.append(
+        asyncio.create_task(
+            host_metrics_loop(
+                shipper, interval_seconds=settings.host_metrics_interval
+            ),
+            name="pct-agent-host-metrics",
         )
     )
     return tasks

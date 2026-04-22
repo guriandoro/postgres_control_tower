@@ -78,6 +78,12 @@ services:
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.13
+    # `--log-outputs` accepts `stderr|stdout|<file path>` and tees to all of
+    # them. We keep stderr so `docker logs etcd` still works, *and* write
+    # the same JSON stream to /var/log/etcd/etcd.log so the sibling
+    # pct-agent containers can tail it as the `etcd` source. Without this,
+    # the etcd source is silent in compose because Docker's json-file
+    # driver writes to a host path the agent can't see.
     command:
       - etcd
       - --name=etcd
@@ -89,10 +95,14 @@ services:
       - --initial-cluster=etcd=http://etcd:2380
       - --initial-cluster-state=new
       - --initial-cluster-token=pct-demo
+      - --logger=zap
+      - --log-level=info
+      - --log-outputs=stderr,/var/log/etcd/etcd.log
     environment:
       ETCD_ENABLE_V2: "false"
     volumes:
       - etcd-data:/var/lib/etcd
+      - etcd-logs:/var/log/etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 5s
@@ -219,10 +229,15 @@ services:
       - pgbr-ha-logs:/var/log/pgbackrest
       - patroni-1-socket:/var/run/postgresql
       - agent-patroni-1-state:/var/lib/pct-agent
+      # Shared volume populated by the etcd container's --log-outputs.
+      # Mounted read-only so the tailer cannot accidentally truncate.
+      - etcd-logs:/var/log/etcd:ro
     depends_on:
       manager:
         condition: service_healthy
       patroni-1:
+        condition: service_healthy
+      etcd:
         condition: service_healthy
 
   pct-agent-patroni-2:
@@ -243,15 +258,19 @@ services:
       - pgbr-ha-logs:/var/log/pgbackrest
       - patroni-2-socket:/var/run/postgresql
       - agent-patroni-2-state:/var/lib/pct-agent
+      - etcd-logs:/var/log/etcd:ro
     depends_on:
       manager:
         condition: service_healthy
       patroni-2:
         condition: service_healthy
+      etcd:
+        condition: service_healthy
 
 volumes:
   mgr-db-data:
   etcd-data:
+  etcd-logs:
 
   pg-standalone-data:
   pg-standalone-pglogs:

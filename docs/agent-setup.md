@@ -86,7 +86,13 @@ patroni_interval: 30
 pg_log_paths: /var/log/postgresql/postgresql-16-main.log
 pgbackrest_log_paths: /var/log/pgbackrest/main-backup.log,/var/log/pgbackrest/main-archive-push.log
 patroni_log_paths: ""        # leave empty on standalone hosts
-etcd_log_paths: ""
+etcd_log_paths: ""           # only on Patroni nodes; point at etcd's
+                             # log file (or a shared volume in compose)
+
+# OS source: journalctl is the production path; the /proc-based sampler
+# below also runs and ships under source='os' so the UI is never empty.
+# Set to 0 to disable on hosts where you only want journalctl events.
+host_metrics_interval: 60
 
 shipper_batch_size: 200
 shipper_flush_interval: 5.0

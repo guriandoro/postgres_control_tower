@@ -16,7 +16,10 @@ patroni_interval: 30
 pg_log_paths: /var/log/postgresql/postgresql-*.log
 pgbackrest_log_paths: /var/log/pgbackrest/ha-demo-backup.log,/var/log/pgbackrest/ha-demo-archive-push.log
 patroni_log_paths: /var/log/patroni/patroni.log
-etcd_log_paths: ""
+# See agent-patroni-1/config.yaml for the rationale.
+etcd_log_paths: /var/log/etcd/etcd.log
+
+host_metrics_interval: 60
 
 shipper_batch_size: 200
 shipper_flush_interval: 5.0
