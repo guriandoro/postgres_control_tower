@@ -24,12 +24,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 #   - postgresql-client-16 (psql, libpq for collectors/wal.py + pt-stalk)
 #   - tini (PID 1) and curl (healthcheck + pt-stalk download)
 #   - gosu (drop privileges to the pct-agent user in the entrypoint)
-#   - perl + procps + sysstat for pt-stalk's OS-level samplers (vmstat,
-#     iostat, ps, top); pt-stalk gracefully skips missing tools but the
-#     gather quality drops noticeably without them.
+#   - perl + procps + sysstat + net-tools for pt-stalk's OS-level samplers
+#     (vmstat, iostat, ps, top, netstat); pt-stalk gracefully skips
+#     missing tools but the gather quality drops noticeably without them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg lsb-release tini gosu \
-        perl procps sysstat \
+        perl procps sysstat net-tools \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
