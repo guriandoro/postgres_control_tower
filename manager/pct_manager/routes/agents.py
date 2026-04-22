@@ -17,7 +17,15 @@ from ..auth import (
 )
 from ..config import settings
 from ..db import get_db
-from ..models import Agent, Cluster, Job, PgbackrestInfo, User, WalHealth
+from ..models import (
+    Agent,
+    Cluster,
+    Job,
+    PatroniState,
+    PgbackrestInfo,
+    User,
+    WalHealth,
+)
 from ..schemas import (
     AgentHeartbeatRequest,
     AgentHeartbeatResponse,
@@ -27,9 +35,21 @@ from ..schemas import (
     IngestAck,
     JobClaim,
     JobResultRequest,
+    PatroniStateIngest,
     PgbackrestInfoIngest,
     WalHealthIngest,
 )
+
+
+# Patroni's role taxonomy is richer than ``agents.role``. Map down to the
+# canonical primary | replica | unknown so existing alerter rules and the
+# fleet grid keep working without reading patroni_state directly.
+_PATRONI_TO_AGENT_ROLE: dict[str, str] = {
+    "leader": "primary",
+    "standby_leader": "primary",
+    "replica": "replica",
+    "sync_standby": "replica",
+}
 
 log = logging.getLogger("pct_manager.routes.agents")
 
@@ -175,6 +195,43 @@ def ingest_wal_health(
     # Role is volatile — keep it on the agent row so the UI doesn't have to
     # join wal_health every time it renders the fleet grid.
     agent.role = payload.role
+    db.commit()
+    db.refresh(row)
+    return IngestAck(id=row.id)
+
+
+@router.post(
+    "/patroni_state",
+    response_model=IngestAck,
+    status_code=status.HTTP_201_CREATED,
+)
+def ingest_patroni_state(
+    payload: PatroniStateIngest,
+    db: Annotated[Session, Depends(get_db)],
+    agent: Annotated[Agent, Depends(get_current_agent)],
+) -> IngestAck:
+    """Store a Patroni REST snapshot from this agent.
+
+    Also denormalizes the Patroni role onto ``agent.role`` (mapped down
+    to ``primary | replica | unknown``) so the fleet grid and alerter
+    rules don't need to join ``patroni_state``. Patroni is a stronger
+    signal than ``pg_is_in_recovery`` (it knows the cluster's view, not
+    just the local node's), so this overwrites whatever the WAL probe
+    most recently set.
+    """
+    row = PatroniState(
+        agent_id=agent.id,
+        captured_at=payload.captured_at,
+        member_name=payload.member_name,
+        patroni_role=payload.patroni_role,
+        state=payload.state,
+        timeline=payload.timeline,
+        lag_bytes=payload.lag_bytes,
+        leader_member=payload.leader_member,
+        members=[m.model_dump(exclude_none=True) for m in payload.members],
+    )
+    db.add(row)
+    agent.role = _PATRONI_TO_AGENT_ROLE.get(payload.patroni_role, "unknown")
     db.commit()
     db.refresh(row)
     return IngestAck(id=row.id)

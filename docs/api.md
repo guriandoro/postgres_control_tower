@@ -45,6 +45,7 @@ All routes are prefixed with `/api/v1`.
 | Agent in    | `/agents/heartbeat`                                | POST   | agent bearer        |
 | Agent in    | `/agents/pgbackrest_info`                          | POST   | agent bearer        |
 | Agent in    | `/agents/wal_health`                               | POST   | agent bearer        |
+| Agent in    | `/agents/patroni_state`                            | POST   | agent bearer        |
 | Agent jobs  | `/agents/jobs/next`                                | GET    | agent bearer        |
 | Agent jobs  | `/agents/jobs/{job_id}/result`                     | POST   | agent bearer        |
 | Logs ingest | `/logs/ingest`                                     | POST   | agent bearer        |
@@ -156,11 +157,41 @@ Returns the cluster + every agent in it, each with its **latest**
       "latest_pgbackrest_info": {
         "captured_at": "2026-04-21T14:50:00+00:00",
         "payload": [{ "name": "main", "backup": [/* ... */] }]
-      }
+      },
+      "latest_patroni_state": null
     }
   ]
 }
 ```
+
+For Patroni clusters, each agent additionally embeds a
+`latest_patroni_state` block populated by the agent's
+[Patroni REST collector](#agent-ingest-patroni-state):
+
+```json
+{
+  "captured_at": "2026-04-22T16:51:00+00:00",
+  "member_name": "patroni-1",
+  "patroni_role": "replica",
+  "state": "streaming",
+  "timeline": 2,
+  "lag_bytes": 0,
+  "leader_member": "patroni-2",
+  "members": [
+    { "name": "patroni-1", "role": "replica", "state": "streaming",
+      "host": "patroni-1", "port": 5432, "timeline": 2, "lag": 0 },
+    { "name": "patroni-2", "role": "leader", "state": "running",
+      "host": "patroni-2", "port": 5432, "timeline": 2 }
+  ]
+}
+```
+
+`patroni_role` is one of `leader` | `replica` | `sync_standby` |
+`standby_leader` | `unknown` — richer than the cluster-wide
+`agents.role` (which stays `primary | replica | unknown`). The manager
+collapses Patroni roles down to `agents.role` on every ingest:
+`leader` and `standby_leader` map to `primary`; `replica` and
+`sync_standby` map to `replica`.
 
 ### Storage runway forecast
 
@@ -221,6 +252,46 @@ Query parameters:
   ]
 }
 ```
+
+## Agent ingest: Patroni state
+
+`POST /api/v1/agents/patroni_state`
+
+Posted by `collectors/patroni.py` after polling the local node's
+Patroni REST endpoint (`GET /cluster`). Shipped only when
+`PCT_AGENT_PATRONI_REST_URL` is set on the agent.
+
+```json
+{
+  "captured_at": "2026-04-22T16:51:00+00:00",
+  "member_name": "patroni-1",
+  "patroni_role": "replica",
+  "state": "streaming",
+  "timeline": 2,
+  "lag_bytes": 0,
+  "leader_member": "patroni-2",
+  "members": [
+    { "name": "patroni-1", "role": "replica", "state": "streaming",
+      "host": "patroni-1", "port": 5432, "timeline": 2, "lag": 0 },
+    { "name": "patroni-2", "role": "leader", "state": "running",
+      "host": "patroni-2", "port": 5432, "timeline": 2 }
+  ]
+}
+```
+
+Side effects on the manager:
+
+- A row is appended to `pct.patroni_state` (the latest row per agent
+  drives the cluster dashboard's Patroni panel).
+- `pct.agents.role` is updated to the collapsed
+  `primary | replica | unknown` mapping (see [Cluster detail](#cluster-detail)
+  for the table).
+
+This makes Patroni the **stronger** signal for `agents.role`: it
+overrides whatever `pg_is_in_recovery()` most recently set via the WAL
+collector. That matters during partitions where a former leader still
+answers "false" to `pg_is_in_recovery()` even though Patroni has
+already elected someone else.
 
 ## Logs
 

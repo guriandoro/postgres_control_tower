@@ -77,6 +77,12 @@ pgbackrest_bin: pgbackrest
 pgbackrest_stanza: ""        # empty = all stanzas
 pgbackrest_interval: 60
 
+# Patroni REST API on this node. Empty disables the patroni collector;
+# leave it empty on standalone hosts. On Patroni nodes, point this at
+# the local node's REST endpoint (default port 8008):
+patroni_rest_url: ""         # e.g. http://patroni-1:8008
+patroni_interval: 30
+
 pg_log_paths: /var/log/postgresql/postgresql-16-main.log
 pgbackrest_log_paths: /var/log/pgbackrest/main-backup.log,/var/log/pgbackrest/main-archive-push.log
 patroni_log_paths: ""        # leave empty on standalone hosts
@@ -137,8 +143,10 @@ You should see, in order:
 1. Heartbeat loop logs (every 30s).
 2. WAL collector logs (if `pg_dsn` is set).
 3. pgBackRest collector logs (every 60s).
-4. Tailers attaching to each configured log file.
-5. Job runner attaching ("Job runner started. long_poll=25s …").
+4. Patroni collector logs (only if `patroni_rest_url` is set;
+   otherwise a single "disabled" line and silence afterwards).
+5. Tailers attaching to each configured log file.
+6. Job runner attaching ("Job runner started. long_poll=25s …").
 
 For a real install, drop a systemd unit:
 

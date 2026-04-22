@@ -205,6 +205,10 @@ services:
       PCT_AGENT_CLUSTER_NAME: ha-demo
       PCT_AGENT_CLUSTER_KIND: patroni
       PCT_AGENT_HOSTNAME: patroni-1
+      # Local Patroni REST API. Enables collectors/patroni.py which
+      # ships role/timeline/lag to the manager and lets the heartbeat
+      # report the right primary|replica without guessing.
+      PCT_AGENT_PATRONI_REST_URL: http://patroni-1:8008
     volumes:
       - ./conf/agent-patroni-1/config.yaml:/etc/pct-agent/config.yaml:ro
       - ./conf/patroni/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
@@ -228,6 +232,7 @@ services:
       PCT_AGENT_CLUSTER_NAME: ha-demo
       PCT_AGENT_CLUSTER_KIND: patroni
       PCT_AGENT_HOSTNAME: patroni-2
+      PCT_AGENT_PATRONI_REST_URL: http://patroni-2:8008
     volumes:
       - ./conf/agent-patroni-2/config.yaml:/etc/pct-agent/config.yaml:ro
       - ./conf/patroni/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro

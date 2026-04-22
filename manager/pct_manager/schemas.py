@@ -5,6 +5,12 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 ClusterKind = Literal["standalone", "patroni"]
 AgentRole = Literal["primary", "replica", "unknown"]
+# Patroni's own role taxonomy is richer than the project-wide AgentRole.
+# We keep AgentRole as the canonical "primary | replica | unknown" used by
+# alerting/older UI, and add PatroniRole for the new patroni_state ingest.
+PatroniRole = Literal[
+    "leader", "replica", "sync_standby", "standby_leader", "unknown"
+]
 UserRole = Literal["viewer", "admin"]
 LogSource = Literal["postgres", "pgbackrest", "patroni", "etcd", "os"]
 LogSeverity = Literal["debug", "info", "warning", "error", "critical"]
@@ -120,6 +126,38 @@ class WalHealthIngest(BaseModel):
     role: AgentRole = "unknown"
 
 
+class PatroniMember(BaseModel):
+    """One entry from Patroni's ``cluster.members`` array.
+
+    All fields optional because the shape varies across Patroni versions
+    and node states (e.g. a stopped replica may omit ``lag``). The agent
+    posts the verbatim payload; we only enforce the keys the UI cares about.
+    """
+
+    name: str | None = None
+    role: str | None = None
+    state: str | None = None
+    host: str | None = None
+    port: int | None = None
+    timeline: int | None = None
+    # Patroni reports lag in bytes for replicas (since 3.x). Older versions
+    # may be missing it entirely; the UI handles ``null`` gracefully.
+    lag: int | None = None
+
+
+class PatroniStateIngest(BaseModel):
+    """Posted by ``collectors/patroni.py`` after polling ``/cluster``."""
+
+    captured_at: datetime
+    member_name: str = Field(min_length=1, max_length=253)
+    patroni_role: PatroniRole = "unknown"
+    state: str | None = Field(default=None, max_length=64)
+    timeline: int | None = None
+    lag_bytes: int | None = None
+    leader_member: str | None = Field(default=None, max_length=253)
+    members: list[PatroniMember] = Field(default_factory=list)
+
+
 class IngestAck(BaseModel):
     ok: Literal[True] = True
     id: int
@@ -144,11 +182,27 @@ class PgbackrestInfoOut(BaseModel):
     payload: Any
 
 
+class PatroniStateOut(BaseModel):
+    """Latest Patroni snapshot a given agent shipped, surfaced in the UI."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    captured_at: datetime
+    member_name: str
+    patroni_role: PatroniRole
+    state: str | None
+    timeline: int | None
+    lag_bytes: int | None
+    leader_member: str | None
+    members: list[PatroniMember]
+
+
 class AgentDetail(AgentOut):
     """Per-agent block embedded in the cluster detail view."""
 
     latest_wal_health: WalHealthOut | None = None
     latest_pgbackrest_info: PgbackrestInfoOut | None = None
+    latest_patroni_state: PatroniStateOut | None = None
 
 
 class ClusterSummary(ClusterOut):

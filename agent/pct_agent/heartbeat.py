@@ -22,6 +22,7 @@ import httpx
 
 from . import __version__
 from .config import AgentSettings, AgentState
+from .runtime_state import AgentRuntimeState
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ _HEARTBEAT_TIMEOUT_SECONDS = 10.0
 async def heartbeat_loop(
     settings: AgentSettings,
     state: dict[str, object],
+    runtime_state: AgentRuntimeState,
     interval_seconds: int = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
 ) -> None:
     """Run forever, posting heartbeats every ``interval_seconds``.
@@ -45,6 +47,11 @@ async def heartbeat_loop(
     has been registered). If the state is missing, this coroutine logs a
     warning and returns immediately so the rest of the agent (collectors,
     diagnostic HTTP) can still come up.
+
+    ``runtime_state`` is the in-process role cache populated by the WAL and
+    Patroni collectors. The heartbeat reads it on every tick instead of
+    hardcoding ``"unknown"``; that way the manager's ``agents.role``
+    converges as soon as either collector has produced one sample.
     """
     manager_url = state.get("manager_url") or settings.manager_url
     agent_token = state.get("agent_token")
@@ -70,7 +77,7 @@ async def heartbeat_loop(
     async with httpx.AsyncClient(timeout=_HEARTBEAT_TIMEOUT_SECONDS) as client:
         while True:
             try:
-                await _send_one(client, url, headers)
+                await _send_one(client, url, headers, runtime_state)
             except asyncio.CancelledError:
                 logger.info("Heartbeat loop cancelled; exiting.")
                 raise
@@ -81,11 +88,16 @@ async def heartbeat_loop(
             await asyncio.sleep(interval_seconds)
 
 
-async def _send_one(client: httpx.AsyncClient, url: str, headers: dict[str, str]) -> None:
+async def _send_one(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    runtime_state: AgentRuntimeState,
+) -> None:
     payload = {
         "agent_time_utc": datetime.now(timezone.utc).isoformat(),
         "version": __version__,
-        "role": "unknown",
+        "role": runtime_state.snapshot_role(),
     }
     response = await client.post(url, json=payload, headers=headers)
     if response.status_code == 401:

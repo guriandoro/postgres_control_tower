@@ -26,6 +26,7 @@ import psycopg
 
 from ..config import AgentSettings
 from ..manager_client import ManagerClient
+from ..runtime_state import AgentRuntimeState
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ FROM pg_stat_archiver s
 async def wal_loop(
     settings: AgentSettings,
     client: ManagerClient,
+    runtime_state: AgentRuntimeState,
     interval_seconds: int | None = None,
 ) -> None:
     if not settings.pg_dsn:
@@ -66,6 +68,14 @@ async def wal_loop(
             logger.exception("WAL probe failed; will retry")
             await asyncio.sleep(interval)
             continue
+
+        # Update the in-process role cache so the heartbeat reports the
+        # correct value even when the Patroni collector is disabled (e.g.
+        # standalone agents). Patroni signals always win over WAL — see
+        # ``runtime_state._SOURCE_RANK``.
+        probed_role = sample.get("role")
+        if isinstance(probed_role, str):
+            runtime_state.update_role(probed_role, "wal")
 
         try:
             await client.post("/api/v1/agents/wal_health", json=sample)

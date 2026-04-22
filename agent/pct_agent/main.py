@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI
-
 from datetime import datetime
 from pathlib import Path
+
+from fastapi import FastAPI
 
 from . import __version__
 from .collectors.log_files import tail_many
 from .collectors.os_logs import os_loop
+from .collectors.patroni import patroni_loop
 from .collectors.pgbackrest import pgbackrest_loop
 from .collectors.wal import wal_loop
 from .config import AgentSettings, AgentState, load_settings
@@ -31,6 +32,7 @@ from .parsers import (
     parse_postgres_line,
 )
 from .runner import runner_loop
+from .runtime_state import AgentRuntimeState
 from .shipper import Shipper
 
 logging.basicConfig(
@@ -49,13 +51,19 @@ async def lifespan(app: FastAPI):
     manager_client: ManagerClient | None = None
 
     agent_token = state.get("agent_token")
+    runtime_state = AgentRuntimeState()
     if agent_token:
         manager_url = str(state.get("manager_url") or settings.manager_url)
         manager_client = ManagerClient(manager_url, str(agent_token))
+        hostname = str(
+            state.get("hostname") or settings.hostname or socket.gethostname()
+        )
 
         background_tasks.append(
             asyncio.create_task(
-                heartbeat_loop(settings, state, settings.heartbeat_interval),
+                heartbeat_loop(
+                    settings, state, runtime_state, settings.heartbeat_interval
+                ),
                 name="pct-agent-heartbeat",
             )
         )
@@ -67,8 +75,16 @@ async def lifespan(app: FastAPI):
         )
         background_tasks.append(
             asyncio.create_task(
-                wal_loop(settings, manager_client),
+                wal_loop(settings, manager_client, runtime_state),
                 name="pct-agent-wal",
+            )
+        )
+        # Patroni REST collector — no-op when patroni_rest_url is unset
+        # (i.e. standalone agents).
+        background_tasks.append(
+            asyncio.create_task(
+                patroni_loop(settings, manager_client, runtime_state, hostname),
+                name="pct-agent-patroni",
             )
         )
 

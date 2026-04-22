@@ -8,6 +8,17 @@
 
 export type ClusterKind = "standalone" | "patroni";
 export type AgentRole = "primary" | "replica" | "unknown";
+/**
+ * Patroni's own role taxonomy. Richer than {@link AgentRole}; surfaced
+ * verbatim by the `/api/v1/agents/patroni_state` ingest so the dashboard
+ * can distinguish a synchronous standby from an async one.
+ */
+export type PatroniRole =
+  | "leader"
+  | "replica"
+  | "sync_standby"
+  | "standby_leader"
+  | "unknown";
 export type LogSource = "postgres" | "pgbackrest" | "patroni" | "etcd" | "os";
 export type LogSeverity = "debug" | "info" | "warning" | "error" | "critical";
 
@@ -45,6 +56,31 @@ export interface PgbackrestInfo {
   payload: unknown;
 }
 
+/** One entry from Patroni's `cluster.members` array. */
+export interface PatroniMember {
+  name?: string;
+  role?: string;
+  state?: string;
+  host?: string;
+  port?: number;
+  timeline?: number;
+  /** Replica WAL apply lag in bytes (Patroni 3.x). Absent on the leader. */
+  lag?: number;
+}
+
+export interface PatroniState {
+  captured_at: string;
+  member_name: string;
+  patroni_role: PatroniRole;
+  state: string | null;
+  timeline: number | null;
+  /** This member's WAL apply lag in bytes. Null for the leader. */
+  lag_bytes: number | null;
+  /** Whichever member held the leader lock at capture time. */
+  leader_member: string | null;
+  members: PatroniMember[];
+}
+
 export interface AgentDetail {
   id: number;
   cluster_id: number;
@@ -56,6 +92,9 @@ export interface AgentDetail {
   created_at: string;
   latest_wal_health: WalHealth | null;
   latest_pgbackrest_info: PgbackrestInfo | null;
+  /** Present only when the cluster runs Patroni and the agent has shipped
+   *  at least one snapshot. */
+  latest_patroni_state: PatroniState | null;
 }
 
 export interface ClusterDetail {

@@ -108,6 +108,50 @@ class WalHealth(Base):
     )
 
 
+class PatroniState(Base):
+    """Per-agent snapshot of the Patroni cluster as seen from this node.
+
+    The agent's Patroni collector polls the local node's REST API
+    (``http://<host>:8008/cluster``) and ships one row per tick. We keep
+    a short history (the latest row drives the UI; older rows are useful
+    for debugging leader churn alongside ``logs.role_transitions``).
+
+    Field shape mirrors what Patroni's REST API returns; ``members`` is
+    stored as raw JSONB so a Patroni version bump cannot break ingest.
+    Roles in ``patroni_role`` are richer than the project-wide
+    ``agents.role`` (which stays ``primary | replica | unknown`` per the
+    invariant in ``00-project.mdc``).
+    """
+
+    __tablename__ = "patroni_state"
+    __table_args__ = (
+        Index("ix_patroni_state_agent_captured", "agent_id", "captured_at"),
+        {"schema": "pct"},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[int] = mapped_column(
+        ForeignKey("pct.agents.id", ondelete="CASCADE"), nullable=False
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    member_name: Mapped[str] = mapped_column(String, nullable=False)
+    # 'leader' | 'replica' | 'sync_standby' | 'standby_leader' | 'unknown'
+    patroni_role: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
+    # Free-form Patroni state string: 'running' | 'streaming' | 'start failed' | ...
+    state: Mapped[str | None] = mapped_column(String, nullable=True)
+    timeline: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Replica WAL lag in bytes (Patroni reports it directly). Null on the leader.
+    lag_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Name of whichever member currently holds the leader role at capture time.
+    leader_member: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Verbatim ``cluster.members`` array from the Patroni REST response.
+    members: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+
+
 class LogEvent(Base):
     """One normalized log record from any agent / source.
 

@@ -10,6 +10,9 @@ pgbackrest_bin: pgbackrest
 pgbackrest_stanza: ha-demo
 pgbackrest_interval: 60
 
+patroni_rest_url: "http://patroni-2:8008"
+patroni_interval: 30
+
 pg_log_paths: /var/log/postgresql/postgresql-*.log
 pgbackrest_log_paths: /var/log/pgbackrest/ha-demo-backup.log,/var/log/pgbackrest/ha-demo-archive-push.log
 patroni_log_paths: /var/log/patroni/patroni.log

@@ -23,12 +23,21 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..db import get_db
-from ..models import Agent, Cluster, PgbackrestInfo, StorageForecast, User, WalHealth
+from ..models import (
+    Agent,
+    Cluster,
+    PatroniState,
+    PgbackrestInfo,
+    StorageForecast,
+    User,
+    WalHealth,
+)
 from ..schemas import (
     AgentDetail,
     ClusterDetail,
     ClusterSummary,
     ClusterWalHealth,
+    PatroniStateOut,
     PgbackrestInfoOut,
     StorageForecastOut,
     WalHealthOut,
@@ -101,6 +110,12 @@ def get_cluster(
             .order_by(PgbackrestInfo.captured_at.desc())
             .limit(1)
         )
+        latest_patroni = db.scalar(
+            select(PatroniState)
+            .where(PatroniState.agent_id == agent.id)
+            .order_by(PatroniState.captured_at.desc())
+            .limit(1)
+        )
         agent_details.append(
             AgentDetail(
                 id=agent.id,
@@ -117,6 +132,11 @@ def get_cluster(
                 latest_pgbackrest_info=(
                     PgbackrestInfoOut.model_validate(latest_pgbr)
                     if latest_pgbr
+                    else None
+                ),
+                latest_patroni_state=(
+                    PatroniStateOut.model_validate(latest_patroni)
+                    if latest_patroni
                     else None
                 ),
             )

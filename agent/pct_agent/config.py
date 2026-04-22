@@ -55,6 +55,13 @@ class AgentSettings(BaseSettings):
     pgbackrest_stanza: str = ""
     pgbackrest_interval: int = 60
 
+    # --- Patroni REST probe (collectors/patroni.py) ---
+    # Base URL of the local node's Patroni REST API. Empty disables the
+    # collector — that's the right default for standalone agents.
+    # Typical compose value: ``http://patroni-1:8008``.
+    patroni_rest_url: str = ""
+    patroni_interval: int = 30
+
     # --- Log file paths (one path per source; multiple via comma-separated) ---
     # Empty disables the corresponding collector. See docs/log-sources.md
     # for the canonical defaults per Postgres / pgBackRest install.
