@@ -136,11 +136,13 @@ def build_pt_stalk_cmd(
         "--pg-database", database,
         # pt-stalk's end-of-run cleanup pass treats files with no
         # non-blank text lines as "empty" and unlinks them. The fork's
-        # default --pg-gzip=yes makes that heuristic delete the gather
+        # default --pg-gzip on makes that heuristic delete the gather
         # output even when it has real bytes (only gzip magic, no text).
-        # Keep the gather output as plain TSV — the runner re-tars+gzips
-        # the whole bundle anyway, so disk footprint is unchanged.
-        "--pg-gzip", "no",
+        # Disable with the Perl-Getopt-style negated flag (the option
+        # is a boolean — `--pg-gzip <value>` would silently leave it
+        # enabled). The runner re-tars+gzips the whole bundle anyway,
+        # so disk footprint is unchanged.
+        "--no-pg-gzip",
         "--dest", str(dest_dir),
         "--pid", str(pid_file),
         "--log", str(log_file),

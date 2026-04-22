@@ -89,8 +89,10 @@ def test_build_pt_stalk_cmd_basics(tmp_path: Path) -> None:
 
     # Disabling pg-gzip is required so pt-stalk's empty-file cleanup
     # doesn't unlink the binary gather output (see pt_stalk.py for the
-    # full rationale).
-    assert arg_value("--pg-gzip") == "no"
+    # full rationale). The fork uses Perl-style boolean flags, so the
+    # negated form (--no-pg-gzip) is the only thing that takes effect.
+    assert "--no-pg-gzip" in cmd
+    assert "--pg-gzip" not in cmd
 
     # Password came from the DSN.
     assert env == {"PGPASSWORD": "s3cr3t"}
