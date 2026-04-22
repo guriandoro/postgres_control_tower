@@ -191,6 +191,34 @@ sudo systemctl enable --now pct-agent
 sudo systemctl status pct-agent
 ```
 
+## 4b. pt-stalk diagnostics (optional)
+
+The agent also runs the `pt_stalk_collect` Safe Ops job kind, which
+shells out to [pt-stalk](https://docs.percona.com/percona-toolkit/pt-stalk.html)'s
+PostgreSQL collect mode and uploads the resulting bundle to the
+manager as a downloadable artifact. The agent Docker image already
+ships pt-stalk + `gather.sql` at `/usr/local/bin/pt-stalk` and
+`/usr/local/share/pt-stalk/gather.sql`; for a host install, follow the
+upstream
+[pt-stalk-pgsql quickstart](https://raw.githubusercontent.com/guriandoro/percona-toolkit/pt-stalk-pgsql/docs/pt-stalk-pgsql-quickstart.md)
+and put the binary on `PATH`.
+
+Operator knobs (all prefixed `PCT_AGENT_PT_STALK_`):
+
+| Env var                                  | Default                          | Purpose                                                                 |
+| ---------------------------------------- | -------------------------------- | ----------------------------------------------------------------------- |
+| `PCT_AGENT_PT_STALK_BIN`                 | `/usr/local/bin/pt-stalk`        | Path to the pt-stalk script.                                            |
+| `PCT_AGENT_PT_STALK_GATHER_SQL_PATH`     | *empty (use pt-stalk default)*   | Override `gather.sql` location; exported as `PT_STALK_GATHER_SQL`.      |
+| `PCT_AGENT_PT_STALK_DEST_DIR`            | `/var/lib/pct-agent/pt-stalk`    | Where pt-stalk writes per-job subdirectories before tarring.            |
+| `PCT_AGENT_PT_STALK_PG_PASSWORD`         | *empty*                          | Override the PG password used by pt-stalk; otherwise parsed from `pg_dsn`. |
+| `PCT_AGENT_PT_STALK_MAX_RUNTIME_SECONDS` | `1800`                           | Hard timeout — protects the agent from a wedged subprocess.             |
+| `PCT_AGENT_PT_STALK_UPLOAD_TIMEOUT_SECONDS` | `300.0`                       | Multipart upload timeout for sending the bundle to the manager.         |
+
+Connection host/user/dbname/port come from the agent's existing
+`pg_dsn`; only the password and the bundle directory live in the
+pt-stalk-specific settings. Operators can also override the database
+per-job via the `database` param in the Jobs dialog.
+
 ## 5. Verify in the UI
 
 Open the manager UI and:

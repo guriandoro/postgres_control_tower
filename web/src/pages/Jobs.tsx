@@ -5,6 +5,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
+  Download,
   Pause,
   Play,
   Plus,
@@ -28,6 +29,10 @@ import {
   useDeleteBackupSchedule,
   useUpdateBackupSchedule,
 } from "@/hooks/mutations/useBackupScheduleMutations";
+import {
+  downloadJobArtifact,
+  useJobArtifacts,
+} from "@/hooks/queries/useJobArtifacts";
 import { useAuth } from "@/auth/AuthContext";
 import {
   BACKUP_SCHEDULE_KINDS,
@@ -36,11 +41,15 @@ import {
   type BackupScheduleKind,
   type ClusterSummary,
   type Job,
+  type JobArtifact,
   type JobKind,
   type JobStatus,
 } from "@/api/types";
 import { ApiError } from "@/api/client";
 import { formatRelative, formatUtc } from "@/lib/format";
+
+const PT_STALK_DEFAULT_RUNTIME_SECONDS = 30;
+const PT_STALK_DEFAULT_ITERATIONS = 1;
 
 type SubmitMode = "one_off" | "schedule";
 
@@ -476,8 +485,21 @@ function StatusBadge({ status }: { status: JobStatus }) {
 }
 
 function JobDetails({ job }: { job: Job }) {
+  const isTerminal = job.status === "succeeded" || job.status === "failed";
+  // Only show the artifacts panel for kinds that actually produce one;
+  // pgBackRest jobs never upload artifacts in v1, so the extra column
+  // would just look empty.
+  const showArtifacts = job.kind === "pt_stalk_collect";
+  const artifacts = useJobArtifacts(showArtifacts ? job.id : undefined, {
+    isTerminal,
+  });
+
+  const gridClass = showArtifacts
+    ? "grid gap-3 md:grid-cols-3"
+    : "grid gap-3 md:grid-cols-2";
+
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className={gridClass}>
       <div className="space-y-1 text-xs">
         <div className="text-muted-foreground">Params</div>
         <pre className="scroll-thin max-h-40 overflow-auto rounded-md border border-border bg-background p-2 font-mono text-[11px]">
@@ -498,8 +520,103 @@ function JobDetails({ job }: { job: Job }) {
           {job.stdout_tail || "(no output yet)"}
         </pre>
       </div>
+      {showArtifacts && (
+        <ArtifactsPanel
+          artifacts={artifacts.data ?? []}
+          isLoading={artifacts.isLoading}
+          isError={artifacts.isError}
+          error={artifacts.error as Error | null}
+        />
+      )}
     </div>
   );
+}
+
+function ArtifactsPanel({
+  artifacts,
+  isLoading,
+  isError,
+  error,
+}: {
+  artifacts: JobArtifact[];
+  isLoading: boolean;
+  isError: boolean;
+  error: Error | null;
+}) {
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  async function handleDownload(artifact: JobArtifact) {
+    setDownloadError(null);
+    setDownloadingId(artifact.id);
+    try {
+      await downloadJobArtifact(artifact);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-1 text-xs">
+      <div className="flex items-center justify-between text-muted-foreground">
+        <span>Artifacts</span>
+        {isLoading && <Spinner />}
+      </div>
+      {isError && (
+        <div className="flex items-center gap-1 text-destructive">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {error?.message ?? "Failed to load artifacts"}
+        </div>
+      )}
+      {!isError && artifacts.length === 0 && !isLoading && (
+        <p className="rounded-md border border-dashed border-border p-3 text-muted-foreground">
+          No artifacts yet. They are uploaded after pt-stalk finishes.
+        </p>
+      )}
+      {artifacts.length > 0 && (
+        <ul className="space-y-1">
+          {artifacts.map((a) => (
+            <li
+              key={a.id}
+              className="flex items-center justify-between gap-2 rounded-md border border-border bg-background p-2"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-mono text-[11px]" title={a.filename}>
+                  {a.filename}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {formatBytes(a.size_bytes)} · {formatUtc(a.uploaded_at)}
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={downloadingId === a.id}
+                onClick={() => handleDownload(a)}
+                title="Download artifact"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {downloadError && (
+        <p className="text-destructive" role="alert">
+          {downloadError}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
 // ---------- Submit dialog (one-off + recurring) ----------
@@ -520,6 +637,13 @@ function SubmitJobDialog({
   const [kind, setKind] = useState<JobKind>("backup_incr");
   const [clusterId, setClusterId] = useState<string>("");
   const [stanza, setStanza] = useState("");
+  const [ptStalkRuntime, setPtStalkRuntime] = useState<string>(
+    String(PT_STALK_DEFAULT_RUNTIME_SECONDS),
+  );
+  const [ptStalkIterations, setPtStalkIterations] = useState<string>(
+    String(PT_STALK_DEFAULT_ITERATIONS),
+  );
+  const [ptStalkDatabase, setPtStalkDatabase] = useState<string>("");
   const [cron, setCron] = useState<string>(CRON_PRESETS[0].expression);
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -533,6 +657,9 @@ function SubmitJobDialog({
     setKind("backup_incr");
     setClusterId("");
     setStanza("");
+    setPtStalkRuntime(String(PT_STALK_DEFAULT_RUNTIME_SECONDS));
+    setPtStalkIterations(String(PT_STALK_DEFAULT_ITERATIONS));
+    setPtStalkDatabase("");
     setCron(CRON_PRESETS[0].expression);
     setConfirm(false);
     setError(null);
@@ -559,6 +686,8 @@ function SubmitJobDialog({
 
   const isPending = create.isPending || createSchedule.isPending;
 
+  const isPtStalk = effectiveKind === "pt_stalk_collect";
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -583,6 +712,29 @@ function SubmitJobDialog({
           params: stanza ? { stanza } : {},
           enabled: true,
         });
+      } else if (isPtStalk) {
+        const runtime = Number(ptStalkRuntime);
+        const iterations = Number(ptStalkIterations);
+        if (!Number.isFinite(runtime) || runtime < 1 || runtime > 3600) {
+          setError("Run time must be between 1 and 3600 seconds.");
+          return;
+        }
+        if (!Number.isFinite(iterations) || iterations < 1 || iterations > 60) {
+          setError("Iterations must be between 1 and 60.");
+          return;
+        }
+        const params: Record<string, unknown> = {
+          run_time_seconds: runtime,
+          iterations,
+        };
+        if (ptStalkDatabase.trim()) {
+          params.database = ptStalkDatabase.trim();
+        }
+        await create.mutateAsync({
+          kind: effectiveKind,
+          cluster_id: Number(clusterId),
+          params,
+        });
       } else {
         await create.mutateAsync({
           kind: effectiveKind,
@@ -596,16 +748,19 @@ function SubmitJobDialog({
     }
   }
 
+  const dialogDescription =
+    mode === "schedule"
+      ? "The manager will queue a job for this cluster every time the cron expression matches (UTC)."
+      : isPtStalk
+        ? "Read-only diagnostic snapshot. The agent runs pt-stalk against its local Postgres and uploads the resulting bundle as a downloadable artifact."
+        : "The selected cluster's primary agent will execute this on its next long-poll.";
+
   return (
     <Dialog
       open={open}
       onClose={close}
       title={mode === "schedule" ? "New backup schedule" : "Submit job"}
-      description={
-        mode === "schedule"
-          ? "The manager will queue a job for this cluster every time the cron expression matches (UTC)."
-          : "The selected cluster's primary agent will execute this on its next long-poll."
-      }
+      description={dialogDescription}
       footer={
         <>
           <Button variant="ghost" onClick={close} type="button" disabled={isPending}>
@@ -662,13 +817,51 @@ function SubmitJobDialog({
           )}
         </Field>
 
-        <Field label="Stanza (optional)">
-          <Input
-            value={stanza}
-            onChange={(e) => setStanza(e.target.value)}
-            placeholder="leave blank to use agent default"
-          />
-        </Field>
+        {!isPtStalk && (
+          <Field label="Stanza (optional)">
+            <Input
+              value={stanza}
+              onChange={(e) => setStanza(e.target.value)}
+              placeholder="leave blank to use agent default"
+            />
+          </Field>
+        )}
+
+        {isPtStalk && (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Run time (seconds)">
+                <Input
+                  type="number"
+                  min={1}
+                  max={3600}
+                  value={ptStalkRuntime}
+                  onChange={(e) => setPtStalkRuntime(e.target.value)}
+                />
+              </Field>
+              <Field label="Iterations">
+                <Input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={ptStalkIterations}
+                  onChange={(e) => setPtStalkIterations(e.target.value)}
+                />
+              </Field>
+            </div>
+            <Field label="Database (optional)">
+              <Input
+                value={ptStalkDatabase}
+                onChange={(e) => setPtStalkDatabase(e.target.value)}
+                placeholder="defaults to agent's pg_dsn dbname (postgres)"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Connection host/user/port come from the agent's <code>pg_dsn</code>;
+                only override the database here.
+              </p>
+            </Field>
+          </>
+        )}
 
         {mode === "schedule" && (
           <Field label="Cron expression (UTC)">
@@ -711,6 +904,13 @@ function SubmitJobDialog({
               <>
                 I understand the manager will run <code>{effectiveKind}</code>{" "}
                 against the selected cluster on every cron match.
+              </>
+            ) : isPtStalk ? (
+              <>
+                I understand this will run a read-only{" "}
+                <code>pt_stalk_collect</code> snapshot against the selected
+                cluster's primary agent and upload the resulting bundle to the
+                manager.
               </>
             ) : (
               <>

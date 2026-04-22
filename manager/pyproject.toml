@@ -28,8 +28,16 @@ dependencies = [
   "httpx>=0.27",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
 [project.scripts]
 pct-manager = "pct_manager.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pct_manager"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

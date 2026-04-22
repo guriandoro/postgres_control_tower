@@ -94,6 +94,30 @@ class AgentSettings(BaseSettings):
     # output is captured by the pgBackRest log tailer in any case.
     runner_stdout_tail_chars: int = 16_000
 
+    # --- pt-stalk PostgreSQL collect (Safe Ops kind: pt_stalk_collect) ---
+    # Path to the pt-stalk binary. The agent image installs the
+    # `pt-stalk-pgsql` branch at this location.
+    pt_stalk_bin: str = "/usr/local/bin/pt-stalk"
+    # gather.sql lives in pt-stalk's default search path; this is only
+    # used when the operator overrides the location (it's exported as
+    # ``PT_STALK_GATHER_SQL`` for the subprocess if non-empty).
+    pt_stalk_gather_sql_path: str = ""
+    # Where pt-stalk writes its run subdirectories. The runner tar-gzips
+    # the resulting bundle before uploading it to the manager.
+    pt_stalk_dest_dir: Path = Path("/var/lib/pct-agent/pt-stalk")
+    # Override the PG password used by pt-stalk. If empty, the runner
+    # tries to extract it from ``pg_dsn`` (libpq DSN may include
+    # ``password=...``); if that's also empty, pt-stalk runs without
+    # PGPASSWORD and relies on ``~/.pgpass`` / peer auth.
+    pt_stalk_pg_password: str = ""
+    # Hard timeout applied to a pt-stalk job (seconds). Defaults to 30
+    # minutes — well above any reasonable collect run, but small enough
+    # to protect the agent from a wedged subprocess.
+    pt_stalk_max_runtime_seconds: int = 30 * 60
+    # Multipart upload timeout. Independent of the http client default
+    # so a 100 MiB bundle on a slow link doesn't trip the 15s default.
+    pt_stalk_upload_timeout_seconds: float = 300.0
+
     # Subset of file-config that may also be set via env for one-shot installs:
     enrollment_token: str | None = None
     cluster_name: str | None = None

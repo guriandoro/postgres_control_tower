@@ -309,6 +309,11 @@ JobKind = Literal[
     "backup_incr",
     "check",
     "stanza_create",
+    # Read-only diagnostic snapshot via pt-stalk's PostgreSQL collect mode.
+    # The agent runs `pt-stalk --pgsql --no-stalk --collect` against its
+    # local Postgres, tar-gzips the resulting bundle and uploads it as a
+    # job artifact. Never writes to the DB.
+    "pt_stalk_collect",
 ]
 JOB_KINDS: tuple[JobKind, ...] = (
     "backup_full",
@@ -316,8 +321,28 @@ JOB_KINDS: tuple[JobKind, ...] = (
     "backup_incr",
     "check",
     "stanza_create",
+    "pt_stalk_collect",
 )
 JobStatus = Literal["pending", "running", "succeeded", "failed"]
+
+
+class JobArtifactOut(BaseModel):
+    """A binary blob produced by a job (e.g. a pt-stalk bundle).
+
+    The file lives on the manager filesystem under ``settings.artifacts_dir``;
+    only metadata is stored in ``pct.job_artifacts``. The UI fetches the
+    bytes via ``GET /api/v1/jobs/{job_id}/artifacts/{id}/download``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: int
+    filename: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    uploaded_at: datetime
 
 
 class JobCreateRequest(BaseModel):
@@ -348,6 +373,9 @@ class JobOut(BaseModel):
     finished_at: datetime | None
     exit_code: int | None
     stdout_tail: str | None
+    # Empty for the historical pgBackRest job kinds; populated for jobs
+    # like ``pt_stalk_collect`` that produce a downloadable bundle.
+    artifacts: list[JobArtifactOut] = Field(default_factory=list)
 
 
 # Schedules only fire backups. ``check`` and ``stanza_create`` stay one-off

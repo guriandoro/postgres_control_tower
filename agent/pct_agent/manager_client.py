@@ -51,6 +51,41 @@ class ManagerClient:
             response.raise_for_status()
         return response
 
+    async def post_file(
+        self,
+        path: str,
+        *,
+        file_path: str,
+        filename: str,
+        content_type: str = "application/gzip",
+        extra_form: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> httpx.Response:
+        """Upload a single file as multipart/form-data.
+
+        Used by the runner to ship pt-stalk bundles to the manager. The
+        file is streamed from disk by httpx so we never hold the whole
+        thing in memory. ``timeout`` is widened separately because
+        100+ MiB uploads on a slow link can blow past the default 15s.
+        """
+        url = f"{self._base}{path}"
+        data = dict(extra_form or {})
+        data["filename"] = filename
+        with open(file_path, "rb") as fh:
+            files = {"file": (filename, fh, content_type)}
+            kwargs: dict[str, Any] = {"files": files, "data": data}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            response = await self._client.post(url, **kwargs)
+        if response.status_code == 401:
+            logger.error(
+                "Manager rejected agent token at %s. Re-run `pct-agent register`.",
+                path,
+            )
+        else:
+            response.raise_for_status()
+        return response
+
     async def get(
         self,
         path: str,

@@ -20,6 +20,7 @@ incident, this is the page that says "we already thought about it".
 | `pgbackrest backup --type=incr` | Yes        | `POST /api/v1/jobs`             | ✅            | `kind: "backup_incr"`. Admin-gated.                                    |
 | `pgbackrest check`              | Yes        | `POST /api/v1/jobs`             | ✅            | `kind: "check"`. Admin-gated. Read-only against the repo.              |
 | `pgbackrest stanza-create`      | Yes        | `POST /api/v1/jobs`             | ✅            | `kind: "stanza_create"`. Admin-gated. Idempotent on existing stanzas.  |
+| `pt-stalk` PostgreSQL collect   | Yes        | `POST /api/v1/jobs`             | ✅            | `kind: "pt_stalk_collect"`. Admin-gated. Read-only diagnostic snapshot — only runs `SELECT`s and OS samplers. |
 | Recurring backup schedule       | Yes        | `POST /api/v1/schedules`        | ✅            | Cron-driven; only the three `backup_*` kinds. Admin-gated.             |
 | `pgbackrest restore`            | **No**     | n/a                             | ❌ blocked    | Type literal rejects the value; agent runner allowlist also rejects.   |
 | `pgbackrest stanza-delete`      | **No**     | n/a                             | ❌ blocked    | Same — both layers refuse.                                             |
@@ -158,6 +159,36 @@ layer still refuses. Specifically:
 - If a hostile manager somehow inserts a `restore` row into
   `pct.jobs`, the agent runner sees `kind not in ALLOWED_KINDS`
   and reports `exit_code=126` without ever touching pgBackRest.
+
+## pt-stalk diagnostics — why it's safe
+
+`pt_stalk_collect` is the only non-pgBackRest kind in the v1 allowlist.
+It exists to capture a point-in-time diagnostic bundle (queries via
+`pg_gather`'s `gather.sql`, plus OS samplers like `vmstat`/`iostat`/`ps`)
+the operator can later attach to a support ticket.
+
+It is allowed because:
+
+- **Read-only against the DB.** `pg_gather`'s queries only `SELECT` from
+  catalogs and stats views. The agent runs pt-stalk in `--no-stalk
+  --collect` mode — no monitoring loop, no triggers, just one snapshot.
+- **No write to the cluster filesystem.** Output lands in the agent's
+  own `/var/lib/pct-agent/pt-stalk/` (created by the entrypoint), never
+  in `PGDATA` or the pgBackRest repo.
+- **Bounded runtime.** Hard-capped server-side at
+  `PCT_AGENT_PT_STALK_MAX_RUNTIME_SECONDS` (default 30 minutes); the
+  per-job `run_time_seconds` is further capped at 1..3600.
+- **Bounded blast radius for the upload.** The artifact endpoint
+  enforces `PCT_MAX_ARTIFACT_BYTES` (default 200 MiB) and only stores
+  files under `<artifacts_dir>/<job_id>/`. Filenames are restricted to
+  `[A-Za-z0-9._-]{1,200}` so a malicious agent can't write outside its
+  own directory.
+- **Same `require_admin` gate** as every other job-submission route.
+
+If you ever need to disable it, drop `"pt_stalk_collect"` from
+`JOB_KINDS` in `manager/pct_manager/schemas.py` and `ALLOWED_KINDS` in
+`agent/pct_agent/runner.py`. Both layers refuse, in line with the rest
+of the matrix above.
 
 ## Recurring backup schedules
 

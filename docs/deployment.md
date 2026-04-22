@@ -80,6 +80,8 @@ The manager is a stock FastAPI + uvicorn app. Three things to set:
 | `PCT_LOG_RETENTION_DAYS`        | How long to keep `logs.events`. Default 14.                       |
 | `PCT_WEB_DIST_DIR`              | Path to the built Vite app (`web/dist`). Set in the prod image.   |
 | `PCT_CORS_ALLOW_ORIGINS`        | Comma-separated origins. Empty in prod (same origin).             |
+| `PCT_ARTIFACTS_DIR`             | Filesystem dir for job artifact uploads (e.g. pt-stalk bundles). Default `/var/lib/pct-manager/artifacts`. Mount a dedicated volume here. |
+| `PCT_MAX_ARTIFACT_BYTES`        | Per-upload size cap in bytes. Default `209715200` (200 MiB).      |
 
 The full set is in [`.env.example`](../.env.example) at the repo root.
 
@@ -94,9 +96,16 @@ docker run -d --name pct-manager \
   -e PCT_BOOTSTRAP_ADMIN_EMAIL="ops@example.com" \
   -e PCT_BOOTSTRAP_ADMIN_PASSWORD="$(openssl rand -base64 24)" \
   -e PCT_WEB_DIST_DIR="/srv/web" \
+  -v pct-artifacts:/var/lib/pct-manager/artifacts \
   -p 8080:8080 \
   ghcr.io/yourorg/pct-manager:0.1
 ```
+
+The `pct-artifacts` named volume holds binary uploads from agents
+(today only pt-stalk bundles); these can run to hundreds of MiB per
+job, so a dedicated volume that survives container rebuilds is
+strongly recommended over a bind mount under the container's writable
+layer.
 
 The manager runs Alembic migrations automatically at startup if the
 schema is behind, then serves `/api/v1/*` and the static SPA at `/`.

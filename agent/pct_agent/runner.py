@@ -27,6 +27,12 @@ import httpx
 
 from .config import AgentSettings
 from .manager_client import ManagerClient
+from .pt_stalk import (
+    PtStalkConfigError,
+    build_pt_stalk_cmd,
+    merged_env,
+    tar_run_dir,
+)
 
 log = logging.getLogger("pct_agent.runner")
 
@@ -38,6 +44,8 @@ ALLOWED_KINDS: frozenset[str] = frozenset(
         "backup_incr",
         "check",
         "stanza_create",
+        # Read-only diagnostic snapshot — see pt_stalk.py.
+        "pt_stalk_collect",
     }
 )
 
@@ -131,7 +139,21 @@ async def _run_and_report(
         )
         return
 
-    cmd = _build_command(settings, kind, params)
+    if kind == "pt_stalk_collect":
+        await _run_pt_stalk(settings, client, job_id, params)
+        return
+
+    await _run_pgbackrest(settings, client, job_id, kind, params)
+
+
+async def _run_pgbackrest(
+    settings: AgentSettings,
+    client: ManagerClient,
+    job_id: int,
+    kind: str,
+    params: dict[str, Any],
+) -> None:
+    cmd = _build_pgbackrest_command(settings, kind, params)
     log.info("Job %d -> %s", job_id, " ".join(shlex.quote(c) for c in cmd))
 
     try:
@@ -167,7 +189,99 @@ async def _run_and_report(
     log.info("Reported job %d exit=%s succeeded=%s", job_id, exit_code, succeeded)
 
 
-def _build_command(
+async def _run_pt_stalk(
+    settings: AgentSettings,
+    client: ManagerClient,
+    job_id: int,
+    params: dict[str, Any],
+) -> None:
+    """Run a pt-stalk collect job and ship the resulting tarball.
+
+    Failure ordering matters: we always try to upload whatever bundle
+    pt-stalk left behind, even on a non-zero exit, so the operator has
+    something to look at when the run was unhappy. The result POST is
+    sent last so the ``succeeded`` flag reflects both the subprocess
+    exit and the tar+upload phases.
+    """
+    try:
+        cmd, env_overrides, dest_dir, _pid, _log_file = build_pt_stalk_cmd(
+            settings, params
+        )
+    except PtStalkConfigError as exc:
+        await _report_result(
+            client, job_id,
+            exit_code=2,
+            succeeded=False,
+            stdout_tail=f"pt-stalk: invalid params: {exc}",
+        )
+        return
+
+    log.info(
+        "Job %d -> %s",
+        job_id,
+        " ".join(shlex.quote(c) for c in cmd),
+    )
+
+    try:
+        exit_code, output = await _exec(
+            cmd,
+            timeout=settings.pt_stalk_max_runtime_seconds,
+            env=merged_env(env_overrides),
+        )
+    except FileNotFoundError as exc:
+        await _report_result(
+            client, job_id,
+            exit_code=127,
+            succeeded=False,
+            stdout_tail=f"pt-stalk: executable not found: {exc}",
+        )
+        return
+    except Exception:  # noqa: BLE001
+        log.exception("pt-stalk job %d crashed in runner", job_id)
+        await _report_result(
+            client, job_id,
+            exit_code=1,
+            succeeded=False,
+            stdout_tail="pt-stalk: runner crashed; see agent logs.",
+        )
+        return
+
+    upload_status = ""
+    upload_ok = True
+    try:
+        tarball = await asyncio.to_thread(tar_run_dir, dest_dir)
+        log.info("Job %d tarball ready: %s", job_id, tarball)
+        await client.post_file(
+            f"/api/v1/agents/jobs/{job_id}/artifact",
+            file_path=str(tarball),
+            filename=tarball.name,
+            content_type="application/gzip",
+            timeout=settings.pt_stalk_upload_timeout_seconds,
+        )
+        upload_status = f"\nUploaded artifact: {tarball.name}"
+    except Exception as exc:  # noqa: BLE001
+        upload_ok = False
+        log.exception("pt-stalk job %d artifact upload failed", job_id)
+        upload_status = f"\nArtifact upload FAILED: {exc!s}"
+
+    succeeded = exit_code == 0 and upload_ok
+    tail_room = settings.runner_stdout_tail_chars - len(upload_status)
+    if tail_room < 0:
+        tail_room = 0
+    tail = output[-tail_room:] + upload_status if tail_room else upload_status
+    await _report_result(
+        client, job_id,
+        exit_code=exit_code,
+        succeeded=succeeded,
+        stdout_tail=tail,
+    )
+    log.info(
+        "Reported pt-stalk job %d exit=%s upload_ok=%s succeeded=%s",
+        job_id, exit_code, upload_ok, succeeded,
+    )
+
+
+def _build_pgbackrest_command(
     settings: AgentSettings, kind: str, params: dict[str, Any]
 ) -> list[str]:
     """Assemble the pgBackRest CLI invocation for a given job kind.
@@ -196,17 +310,24 @@ def _build_command(
     return cmd
 
 
-async def _exec(cmd: list[str], *, timeout: float) -> tuple[int, str]:
+async def _exec(
+    cmd: list[str],
+    *,
+    timeout: float,
+    env: dict[str, str] | None = None,
+) -> tuple[int, str]:
     """Run ``cmd`` and return (exit_code, combined_stdout_stderr).
 
     We merge stderr into stdout because pgBackRest writes most progress to
     stderr and we want a single chronological tail in the UI.
     """
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    kwargs: dict[str, Any] = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.STDOUT,
+    }
+    if env is not None:
+        kwargs["env"] = env
+    proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
     try:
         stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:

@@ -1,11 +1,26 @@
 import asyncio
+import hashlib
 import hmac
 import logging
+import os
+import re
 import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,6 +36,7 @@ from ..models import (
     Agent,
     Cluster,
     Job,
+    JobArtifact,
     PatroniState,
     PgbackrestInfo,
     User,
@@ -33,6 +49,7 @@ from ..schemas import (
     AgentRegisterRequest,
     AgentRegisterResponse,
     IngestAck,
+    JobArtifactOut,
     JobClaim,
     JobResultRequest,
     PatroniStateIngest,
@@ -350,3 +367,116 @@ def submit_job_result(
         job.exit_code,
     )
     return IngestAck(id=job.id)
+
+
+# ---------- Safe Ops: agent artifact upload ----------
+#
+# The agent posts a binary blob (e.g. pt-stalk's tar.gz bundle) at the
+# end of a job. We stream it to disk in 1 MiB chunks so a 100+ MiB
+# bundle never lives entirely in memory, hash while writing, and reject
+# anything past the configured cap.
+
+_ARTIFACT_CHUNK_BYTES = 1024 * 1024
+# Restrict filenames to a conservative set so a malicious agent can't
+# write outside <artifacts_dir>/<job_id>/. We also basename anything we
+# accept just to be safe.
+_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
+
+
+@router.post(
+    "/jobs/{job_id}/artifact",
+    response_model=JobArtifactOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_job_artifact(
+    job_id: int,
+    file: Annotated[UploadFile, File(description="The artifact bytes")],
+    db: Annotated[Session, Depends(get_db)],
+    agent: Annotated[Agent, Depends(get_current_agent)],
+    filename: Annotated[
+        str | None,
+        Form(description="Override filename (defaults to UploadFile.filename)"),
+    ] = None,
+    content_type: Annotated[
+        str | None,
+        Form(description="Override MIME type (defaults to application/gzip)"),
+    ] = None,
+) -> JobArtifactOut:
+    """Agent uploads a job's binary artifact.
+
+    The job must belong to the authenticated agent and be in ``running``
+    or ``succeeded``/``failed`` state — pt-stalk uploads typically race
+    with the result POST, so we accept either ordering.
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    if job.agent_id != agent.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Job belongs to another agent"
+        )
+    if job.status not in ("running", "succeeded", "failed"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Job is in status {job.status!r}; cannot accept artifact",
+        )
+
+    raw_name = filename or file.filename or "artifact.bin"
+    safe_name = os.path.basename(raw_name)
+    if not _SAFE_FILENAME_RE.match(safe_name):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "filename must match [A-Za-z0-9._-]{1,200}",
+        )
+
+    artifacts_root = Path(settings.artifacts_dir).resolve()
+    job_dir = artifacts_root / str(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    # Prefix with a short uuid so two uploads of the same filename for
+    # the same job don't clobber each other.
+    on_disk_name = f"{uuid.uuid4().hex[:12]}-{safe_name}"
+    target = job_dir / on_disk_name
+
+    hasher = hashlib.sha256()
+    written = 0
+    cap = settings.max_artifact_bytes
+    try:
+        with target.open("wb") as fh:
+            while True:
+                chunk = await file.read(_ARTIFACT_CHUNK_BYTES)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > cap:
+                    raise HTTPException(
+                        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        f"Artifact exceeds max_artifact_bytes={cap}",
+                    )
+                hasher.update(chunk)
+                fh.write(chunk)
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+
+    artifact = JobArtifact(
+        job_id=job.id,
+        filename=safe_name,
+        content_type=content_type or "application/gzip",
+        size_bytes=written,
+        sha256=hasher.hexdigest(),
+        storage_path=str(target),
+    )
+    db.add(artifact)
+    db.commit()
+    db.refresh(artifact)
+    log.info(
+        "Job %d artifact stored: id=%d filename=%s size=%d",
+        job.id,
+        artifact.id,
+        artifact.filename,
+        artifact.size_bytes,
+    )
+    return JobArtifactOut.model_validate(artifact)

@@ -244,6 +244,47 @@ class Job(Base):
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stdout_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    artifacts: Mapped[list["JobArtifact"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobArtifact.uploaded_at",
+    )
+
+
+class JobArtifact(Base):
+    """A binary blob produced by a job (e.g. a pt-stalk diagnostic bundle).
+
+    The file is stored on the manager filesystem under
+    ``settings.artifacts_dir/<job_id>/<id>-<filename>``; this row only
+    holds metadata. ``sha256`` is computed at upload time so the UI can
+    surface integrity info. Cascading from ``Job`` removes the row on
+    job delete; the on-disk file is best-effort cleaned by the route
+    handler that triggers the delete.
+    """
+
+    __tablename__ = "job_artifacts"
+    __table_args__ = (
+        Index("ix_job_artifacts_job", "job_id"),
+        {"schema": "pct"},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("pct.jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(
+        String(127), nullable=False, default="application/gzip"
+    )
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    job: Mapped[Job] = relationship(back_populates="artifacts")
+
 
 class BackupSchedule(Base):
     """Recurring backup definition fired by the manager scheduler.

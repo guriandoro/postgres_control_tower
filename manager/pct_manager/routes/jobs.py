@@ -16,17 +16,20 @@ both here (FastAPI's literal validator) and in the agent runner
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, require_admin
 from ..db import get_db
-from ..models import Agent, Job, User
+from ..models import Agent, Job, JobArtifact, User
 from ..schemas import (
+    JobArtifactOut,
     JobCreateRequest,
     JobOut,
     JobStatus,
@@ -138,3 +141,48 @@ def get_job(
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
     return job
+
+
+@router.get("/{job_id}/artifacts", response_model=list[JobArtifactOut])
+def list_job_artifacts(
+    job_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> list[JobArtifact]:
+    """Return metadata for every blob produced by this job (oldest first)."""
+    if db.get(Job, job_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    rows = db.scalars(
+        select(JobArtifact)
+        .where(JobArtifact.job_id == job_id)
+        .order_by(JobArtifact.uploaded_at.asc(), JobArtifact.id.asc())
+    ).all()
+    return list(rows)
+
+
+@router.get("/{job_id}/artifacts/{artifact_id}/download")
+def download_job_artifact(
+    job_id: int,
+    artifact_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> FileResponse:
+    """Stream the artifact bytes back to the operator.
+
+    404s if the artifact metadata exists but the on-disk file is gone
+    (e.g. the artifacts volume was wiped); the operator should re-run
+    the job rather than receive an empty file.
+    """
+    artifact = db.get(JobArtifact, artifact_id)
+    if artifact is None or artifact.job_id != job_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artifact not found")
+    if not os.path.isfile(artifact.storage_path):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Artifact bytes missing on disk; re-run the job",
+        )
+    return FileResponse(
+        artifact.storage_path,
+        media_type=artifact.content_type or "application/octet-stream",
+        filename=artifact.filename,
+    )

@@ -39,6 +39,8 @@ All routes are prefixed with `/api/v1`.
 | Logs read   | `/logs/role_transitions`                           | GET    | UI JWT (viewer)     |
 | Jobs read   | `/jobs`, `/jobs/{job_id}`                          | GET    | UI JWT (viewer)     |
 | Jobs write  | `/jobs`                                            | POST   | UI JWT (admin)      |
+| Jobs art    | `/jobs/{job_id}/artifacts`                         | GET    | UI JWT (viewer)     |
+| Jobs art    | `/jobs/{job_id}/artifacts/{id}/download`           | GET    | UI JWT (viewer)     |
 | Schedules   | `/schedules`                                       | GET    | UI JWT (viewer)     |
 | Schedules   | `/schedules`                                       | POST   | UI JWT (admin)      |
 | Schedules   | `/schedules/{id}`                                  | PATCH  | UI JWT (admin)      |
@@ -52,6 +54,7 @@ All routes are prefixed with `/api/v1`.
 | Agent in    | `/agents/patroni_state`                            | POST   | agent bearer        |
 | Agent jobs  | `/agents/jobs/next`                                | GET    | agent bearer        |
 | Agent jobs  | `/agents/jobs/{job_id}/result`                     | POST   | agent bearer        |
+| Agent jobs  | `/agents/jobs/{job_id}/artifact`                   | POST   | agent bearer        |
 | Logs ingest | `/logs/ingest`                                     | POST   | agent bearer        |
 | Health      | `/healthz`                                         | GET    | public              |
 
@@ -399,12 +402,18 @@ allowed.
 - Provide either `agent_id` or `cluster_id`. Both is fine; mismatch is
   a 400.
 - `kind` must be one of `backup_full`, `backup_diff`, `backup_incr`,
-  `check`, `stanza_create`. Anything else is `422`. **`restore` and
-  `stanza_delete` are blocked here _and_ in the agent runner.**
+  `check`, `stanza_create`, `pt_stalk_collect`. Anything else is `422`.
+  **`restore` and `stanza_delete` are blocked here _and_ in the agent
+  runner.**
 - `params.stanza` overrides the agent's default
-  `PCT_AGENT_PGBACKREST_STANZA`.
+  `PCT_AGENT_PGBACKREST_STANZA` (pgBackRest kinds only).
 - `params.extra_args` (list of strings) is appended verbatim after
   the kind-derived flags. Use sparingly.
+- For `pt_stalk_collect`, `params` accepts `run_time_seconds` (1..3600,
+  default 30), `iterations` (1..60, default 1), and `database` (name
+  override; defaults to the agent's `pg_dsn` dbname). Connection
+  host/user/port come from the agent's existing `pg_dsn`; passwords
+  are sourced from `PCT_AGENT_PT_STALK_PG_PASSWORD` or the DSN itself.
 
 Response (`201 Created`): a full `JobOut`.
 
@@ -450,6 +459,62 @@ Response: `200 OK` with the updated `JobOut`.
 `409 Conflict` means the manager doesn't think the job is still
 `running` (e.g. it was reset out-of-band). The runner logs and moves
 on; nothing to retry.
+
+### Job artifacts (binary blobs, e.g. pt-stalk bundles)
+
+Some job kinds produce a downloadable bundle in addition to the
+`stdout_tail`. Today only `pt_stalk_collect` does, but the surface is
+generic. The agent uploads the file with multipart/form-data; the
+operator downloads it via the UI-side endpoints.
+
+#### Agent: upload artifact
+
+`POST /api/v1/agents/jobs/{job_id}/artifact`
+
+```bash
+curl -fsS -X POST https://pct.internal/api/v1/agents/jobs/42/artifact \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -F file=@/var/lib/pct-agent/pt-stalk/pct-1714000000.tgz \
+  -F filename=pct-1714000000.tgz \
+  -F content_type=application/gzip
+```
+
+- The job must belong to the calling agent and be in `running`,
+  `succeeded`, or `failed` state (uploads can race with the result
+  POST in either order).
+- Filenames are restricted to `[A-Za-z0-9._-]{1,200}` to keep them on
+  disk under `<artifacts_dir>/<job_id>/`.
+- The manager streams the body in 1 MiB chunks, hashes with SHA-256,
+  and rejects anything past `PCT_MAX_ARTIFACT_BYTES` (default 200 MiB)
+  with `413`.
+- Response: `201 Created` with a `JobArtifactOut`.
+
+#### List a job's artifacts
+
+`GET /api/v1/jobs/{job_id}/artifacts`
+
+```json
+[
+  {
+    "id": 9,
+    "job_id": 42,
+    "filename": "pct-1714000000.tgz",
+    "content_type": "application/gzip",
+    "size_bytes": 1843201,
+    "sha256": "ab12...",
+    "uploaded_at": "2026-04-22T16:51:30+00:00"
+  }
+]
+```
+
+#### Download an artifact
+
+`GET /api/v1/jobs/{job_id}/artifacts/{artifact_id}/download`
+
+Streams the stored bytes back as `Content-Disposition: attachment`.
+`404` if the metadata row is gone OR if the on-disk file is missing
+(e.g. the artifacts volume was wiped) — re-run the job rather than
+expect an empty file.
 
 ## Backup schedules
 

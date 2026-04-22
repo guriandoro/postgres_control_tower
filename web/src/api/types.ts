@@ -189,7 +189,11 @@ export type JobKind =
   | "backup_diff"
   | "backup_incr"
   | "check"
-  | "stanza_create";
+  | "stanza_create"
+  // Read-only diagnostic snapshot — runs `pt-stalk --pgsql --no-stalk
+  // --collect` on the agent and uploads the resulting bundle as a
+  // job artifact.
+  | "pt_stalk_collect";
 
 export const JOB_KINDS: readonly JobKind[] = [
   "backup_full",
@@ -197,9 +201,20 @@ export const JOB_KINDS: readonly JobKind[] = [
   "backup_incr",
   "check",
   "stanza_create",
+  "pt_stalk_collect",
 ] as const;
 
 export type JobStatus = "pending" | "running" | "succeeded" | "failed";
+
+export interface JobArtifact {
+  id: number;
+  job_id: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  uploaded_at: string;
+}
 
 export interface Job {
   id: number;
@@ -213,6 +228,8 @@ export interface Job {
   finished_at: string | null;
   exit_code: number | null;
   stdout_tail: string | null;
+  /** Empty for pgBackRest jobs; populated for pt_stalk_collect. */
+  artifacts?: JobArtifact[];
 }
 
 export interface JobCreateRequest {

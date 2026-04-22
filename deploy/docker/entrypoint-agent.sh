@@ -11,10 +11,16 @@ set -eu
 STATE_DIR=${PCT_AGENT_STATE_DIR:-/var/lib/pct-agent}
 STATE_FILE=${PCT_AGENT_STATE:-${STATE_DIR}/state.json}
 SPOOL_DIR=${PCT_AGENT_SPOOL_DIR:-${STATE_DIR}/spool}
+PT_STALK_DIR=${PCT_AGENT_PT_STALK_DEST_DIR:-${STATE_DIR}/pt-stalk}
 
 # Make sure mounted volumes have the right ownership for our unprivileged
-# user. Bind mounts default to root-owned on first attach.
-install -d -o pct-agent -g pct-agent -m 0750 "$STATE_DIR" "$SPOOL_DIR"
+# user. Bind mounts default to root-owned on first attach. The pt-stalk
+# directory is where the runner writes per-job subdirectories before
+# tarring them up and uploading to the manager (Safe Ops kind
+# `pt_stalk_collect`); creating it eagerly keeps the first run from
+# tripping a permission error.
+install -d -o pct-agent -g pct-agent -m 0750 \
+    "$STATE_DIR" "$SPOOL_DIR" "$PT_STALK_DIR"
 if [ -f "$STATE_FILE" ]; then
     chown pct-agent:pct-agent "$STATE_FILE" 2>/dev/null || true
 fi

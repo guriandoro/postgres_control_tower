@@ -21,11 +21,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # pgbackrest needs the postgresql-common apt repo for the latest version
 # pinned to PG16. We install:
 #   - pgbackrest (the agent runs `pgbackrest backup` etc.)
-#   - postgresql-client-16 (psql, libpq for collectors/wal.py)
-#   - tini (PID 1) and curl (healthcheck)
+#   - postgresql-client-16 (psql, libpq for collectors/wal.py + pt-stalk)
+#   - tini (PID 1) and curl (healthcheck + pt-stalk download)
 #   - gosu (drop privileges to the pct-agent user in the entrypoint)
+#   - perl + procps + sysstat for pt-stalk's OS-level samplers (vmstat,
+#     iostat, ps, top); pt-stalk gracefully skips missing tools but the
+#     gather quality drops noticeably without them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg lsb-release tini gosu \
+        perl procps sysstat \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
@@ -35,6 +39,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update \
     && apt-get install -y --no-install-recommends pgbackrest postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
+
+# pt-stalk PostgreSQL collect mode (Safe Ops kind: pt_stalk_collect).
+# The script is a self-contained Bash file, no compilation needed. We
+# pin both pieces to a specific commit/SHA so image rebuilds are
+# reproducible — bumping these is a one-line change.
+#
+# Source quickstart:
+#   https://raw.githubusercontent.com/guriandoro/percona-toolkit/pt-stalk-pgsql/docs/pt-stalk-pgsql-quickstart.md
+ARG PT_STALK_SHA=800984ee
+ARG PG_GATHER_SHA=main
+RUN curl -fsSL -o /usr/local/bin/pt-stalk \
+        "https://raw.githubusercontent.com/guriandoro/percona-toolkit/${PT_STALK_SHA}/bin/pt-stalk" \
+    && chmod +x /usr/local/bin/pt-stalk \
+    && install -d /usr/local/share/pt-stalk \
+    && curl -fsSL -o /usr/local/share/pt-stalk/gather.sql \
+        "https://raw.githubusercontent.com/jobinau/pg_gather/${PG_GATHER_SHA}/gather.sql"
 
 # Create the unprivileged user the agent runs as. UID/GID 999 deliberately
 # matches the `postgres` user in the upstream postgres:16-bookworm image
@@ -48,7 +68,8 @@ RUN groupadd --system --gid 999 pct-agent \
     && useradd --system --uid 999 --gid 999 \
         --home-dir /var/lib/pct-agent --shell /usr/sbin/nologin pct-agent \
     && install -d -o pct-agent -g pct-agent -m 0750 \
-        /var/lib/pct-agent /var/lib/pct-agent/spool /etc/pct-agent
+        /var/lib/pct-agent /var/lib/pct-agent/spool \
+        /var/lib/pct-agent/pt-stalk /etc/pct-agent
 
 WORKDIR /app
 

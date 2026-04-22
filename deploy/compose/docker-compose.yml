@@ -65,6 +65,12 @@ services:
       <<: *mgr-env
     ports:
       - "8080:8080"
+    volumes:
+      # Persists job artifact uploads (pt-stalk bundles via the
+      # pt_stalk_collect Safe Ops kind) across container rebuilds. The
+      # manager defaults `PCT_ARTIFACTS_DIR` to this path; the in-DB row
+      # only stores metadata, not the bytes.
+      - mgr-artifacts:/var/lib/pct-manager/artifacts
     depends_on:
       mgr-db:
         condition: service_healthy
@@ -269,6 +275,7 @@ services:
 
 volumes:
   mgr-db-data:
+  mgr-artifacts:
   etcd-data:
   etcd-logs:
 

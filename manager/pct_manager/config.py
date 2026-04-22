@@ -79,6 +79,19 @@ class Settings(BaseSettings):
     # Slack incoming webhook. Empty disables the Slack notifier.
     slack_webhook_url: str = ""
 
+    # --- Job artifacts (pt-stalk bundles, future diagnostic uploads) ---
+    # Filesystem directory where the manager stores binary artifacts
+    # uploaded by agents (e.g. pt-stalk tarballs). Files land under
+    # ``<artifacts_dir>/<job_id>/<artifact_id>-<filename>``. The path is
+    # created on first upload; in production, mount a dedicated volume
+    # here so artifacts survive container rebuilds.
+    artifacts_dir: str = "/var/lib/pct-manager/artifacts"
+    # Hard ceiling for any single artifact upload, in bytes. The agent
+    # will refuse to upload anything larger; the route enforces the same
+    # cap server-side. 200 MiB is enough for a 30-iteration pt-stalk run
+    # on a busy DB; bump it if you collect hour-long snapshots.
+    max_artifact_bytes: int = 200 * 1024 * 1024
+
     # SMTP — empty smtp_host disables the SMTP notifier.
     smtp_host: str = ""
     smtp_port: int = 587
