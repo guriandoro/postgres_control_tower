@@ -22,7 +22,7 @@ ENV PG_LOG_DIR=/var/log/postgresql \
     PGBACKREST_REPO=/var/lib/pgbackrest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl pgbackrest tini \
+        ca-certificates curl pgbackrest tini net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 RUN install -d -o postgres -g postgres -m 0755 \

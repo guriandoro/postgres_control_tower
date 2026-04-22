@@ -26,7 +26,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATRONI_CONFIG=/etc/patroni/patroni.yml
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg lsb-release tini gosu gettext-base \
+        ca-certificates curl gnupg lsb-release tini gosu gettext-base net-tools \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
