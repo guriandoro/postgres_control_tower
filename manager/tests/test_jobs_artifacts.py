@@ -182,8 +182,28 @@ def test_upload_rejects_unsafe_filename(
 ):
     _, a1, _ = cluster_and_agents
     job = job_for(a1.id, status="running")
-    r = _upload(client, job.id, body=b"x", filename="../etc/passwd")
+    # Spaces and other chars outside [A-Za-z0-9._-] must be rejected.
+    # (Path-traversal sequences like "../etc/passwd" are neutered by
+    # os.path.basename first; the regex catches everything else.)
+    r = _upload(client, job.id, body=b"x", filename="bad name.tgz")
     assert r.status_code == 400
+
+
+def test_upload_neuters_path_traversal_filename(
+    client, cluster_and_agents, job_for, patch_artifacts_dir, auth_overrides,
+):
+    _, a1, _ = cluster_and_agents
+    job = job_for(a1.id, status="running")
+    r = _upload(client, job.id, body=b"y", filename="../etc/passwd")
+    assert r.status_code == 201
+    # The on-disk file must live inside <artifacts_dir>/<job_id>/, NOT
+    # at /etc/passwd. The stored row reports the basename only.
+    payload = r.json()
+    assert payload["filename"] == "passwd"
+    job_dir = patch_artifacts_dir / str(job.id)
+    files = list(job_dir.iterdir())
+    assert len(files) == 1
+    assert files[0].parent == job_dir
 
 
 def test_upload_enforces_size_cap(
