@@ -209,6 +209,11 @@ class ClusterSummary(ClusterOut):
     """List view: cluster + counts + freshness, no large payloads."""
 
     agent_count: int
+    # Agents whose ``last_seen_at`` falls inside the manager's freshness
+    # window (see ``ONLINE_FRESH_SECONDS`` in ``routes/clusters.py``).
+    # The fleet dashboard sums this across clusters so the "Agents online"
+    # tile drops when an agent stops heartbeating.
+    agents_online: int = 0
     last_seen_at: datetime | None = None
 
 

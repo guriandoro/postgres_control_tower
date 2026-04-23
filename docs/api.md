@@ -117,7 +117,9 @@ call.
 `GET /api/v1/clusters?limit=100`
 
 Returns a **summary** view (cluster row + counts), not full
-per-agent state.
+per-agent state. `agent_count` is the number of registered agents;
+`agents_online` is the subset whose last heartbeat landed within the
+last 5 minutes (matches the fleet dashboard's "Agents online" tile).
 
 ```json
 [
@@ -127,6 +129,7 @@ per-agent state.
     "kind": "standalone",
     "created_at": "2026-04-01T00:00:00+00:00",
     "agent_count": 1,
+    "agents_online": 1,
     "last_seen_at": "2026-04-21T14:51:00+00:00"
   }
 ]

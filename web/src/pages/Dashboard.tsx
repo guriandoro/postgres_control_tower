@@ -33,7 +33,7 @@ export function DashboardPage() {
         />
         <StatCard
           title="Agents online"
-          value={data?.reduce((sum, c) => sum + c.agent_count, 0) ?? "—"}
+          value={data?.reduce((sum, c) => sum + c.agents_online, 0) ?? "—"}
           icon={<Server className="h-4 w-4 text-primary" />}
         />
         <StatCard

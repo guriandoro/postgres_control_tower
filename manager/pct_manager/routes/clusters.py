@@ -46,17 +46,34 @@ from ..schemas import (
 
 router = APIRouter()
 
+# Freshness window used by the fleet view's "Agents online" counter. Matches
+# the UI's 5-minute cluster freshness badge and ``CLOCK_DRIFT_FRESH_SECONDS``
+# in the alerter — an agent that hasn't heartbeat within this window is not
+# counted as online. Kept here (not in config.py) because this is a
+# presentation concern for the dashboard, not a tuning knob.
+ONLINE_FRESH_SECONDS = 5 * 60
+
 
 @router.get("", response_model=list[ClusterSummary])
 def list_clusters(
     db: Annotated[Session, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> list[ClusterSummary]:
-    """Fleet view. Adds agent_count and last_seen_at across the cluster."""
+    """Fleet view. Adds agent counts and last_seen_at across the cluster.
+
+    ``agents_online`` counts agents whose last heartbeat lands within
+    ``ONLINE_FRESH_SECONDS``; ``agent_count`` stays the *registered*
+    total so the per-cluster card can still show e.g. "3 agents" even
+    when some are stale.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=ONLINE_FRESH_SECONDS)
     stmt = (
         select(
             Cluster,
             func.count(Agent.id).label("agent_count"),
+            func.count(Agent.id)
+            .filter(Agent.last_seen_at >= cutoff)
+            .label("agents_online"),
             func.max(Agent.last_seen_at).label("last_seen_at"),
         )
         .outerjoin(Agent, Agent.cluster_id == Cluster.id)
@@ -71,9 +88,10 @@ def list_clusters(
             kind=cluster.kind,  # type: ignore[arg-type]
             created_at=cluster.created_at,
             agent_count=agent_count,
+            agents_online=agents_online,
             last_seen_at=last_seen_at,
         )
-        for cluster, agent_count, last_seen_at in rows
+        for cluster, agent_count, agents_online, last_seen_at in rows
     ]
 
 

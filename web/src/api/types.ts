@@ -40,6 +40,10 @@ export interface ClusterSummary {
   kind: ClusterKind;
   created_at: string;
   agent_count: number;
+  /** Agents whose `last_seen_at` is within the manager's freshness
+   *  window (5 minutes). Summed across clusters on the fleet dashboard
+   *  so the "Agents online" tile drops when an agent goes stale. */
+  agents_online: number;
   last_seen_at: string | null;
 }
 
