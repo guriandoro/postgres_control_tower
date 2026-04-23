@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
+import { AlertTriangle, Download, RefreshCw, Search, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -12,9 +12,16 @@ import { useAgents } from "@/hooks/queries/useAgents";
 import { useClusters } from "@/hooks/queries/useClusters";
 import { useLogs, type LogFilters } from "@/hooks/queries/useLogs";
 import { evaluateRules } from "@/rca/rules";
+import { apiRequest } from "@/api/client";
 import type { AgentRole, LogEvent, LogSeverity, LogSource } from "@/api/types";
 import { formatUtc } from "@/lib/format";
 import { queryKeys } from "@/api/keys";
+
+// Hard cap matches `_MAX_QUERY_LIMIT` in `manager/pct_manager/routes/logs.py`.
+// We deliberately fetch up to this cap (rather than reusing the table's 200)
+// so a "Download" gives the operator the largest filtered batch the manager
+// will serve in a single hop, without us having to paginate client-side.
+const DOWNLOAD_LIMIT = 1_000;
 
 const SOURCES: LogSource[] = ["postgres", "pgbackrest", "patroni", "etcd", "os"];
 const SEVERITIES: LogSeverity[] = ["debug", "info", "warning", "error", "critical"];
@@ -51,6 +58,9 @@ export function LogsPage() {
 
   const hints = useMemo(() => evaluateRules(events), [events]);
 
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
   function patch(next: Partial<Record<keyof LogFilters, string>>) {
     const merged = new URLSearchParams(params);
     for (const [k, v] of Object.entries(next)) {
@@ -64,6 +74,36 @@ export function LogsPage() {
     queryClient.invalidateQueries({ queryKey: queryKeys.logs(filters) });
   }
 
+  async function download() {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      // Re-query with the highest limit the backend allows so the file
+      // can carry more than the 200 rows the table renders. Spread first,
+      // then override `limit` so the table's React Query cache entry
+      // stays untouched.
+      const data = await apiRequest<LogEvent[]>("/api/v1/logs/events", {
+        query: { ...filters, limit: DOWNLOAD_LIMIT },
+      });
+      const ndjson = data.map((e) => JSON.stringify(e)).join("\n") + "\n";
+      const blob = new Blob([ndjson], { type: "application/x-ndjson" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = buildFilename(filters, data.length);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Defer the revoke so Safari has time to start the download
+      // before the URL goes away.
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <header className="flex flex-wrap items-center justify-between gap-4">
@@ -74,9 +114,27 @@ export function LogsPage() {
             etcd and OS journald. Auto-refreshes every 5 minutes.
           </p>
         </div>
-        <Button variant="secondary" onClick={snap}>
-          <RefreshCw className="h-4 w-4" /> Instant Snap
-        </Button>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={download}
+              disabled={downloading}
+              title={`Download up to ${DOWNLOAD_LIMIT} matching events as NDJSON`}
+            >
+              {downloading ? <Spinner /> : <Download className="h-4 w-4" />}
+              Download
+            </Button>
+            <Button variant="secondary" onClick={snap}>
+              <RefreshCw className="h-4 w-4" /> Instant Snap
+            </Button>
+          </div>
+          {downloadError && (
+            <p className="text-xs text-destructive" role="alert">
+              Download failed: {downloadError}
+            </p>
+          )}
+        </div>
       </header>
 
       <Card>
@@ -304,4 +362,15 @@ function numberOrUndef(v: string | null): number | undefined {
   if (!v) return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function buildFilename(filters: LogFilters, count: number): string {
+  // Compact UTC timestamp, e.g. 20260423T155841Z. Shell- and Windows-safe.
+  const ts = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const parts = ["pct-logs", ts, `n${count}`];
+  if (filters.cluster_id != null) parts.push(`cluster${filters.cluster_id}`);
+  if (filters.agent_id != null) parts.push(`agent${filters.agent_id}`);
+  if (filters.source) parts.push(filters.source);
+  if (filters.severity) parts.push(filters.severity);
+  return `${parts.join("-")}.ndjson`;
 }
